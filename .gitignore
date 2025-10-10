@@ -1,1 +1,8 @@
 src/__init__.py
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+.__pyc
+.vscode/
