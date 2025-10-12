@@ -2,6 +2,11 @@ import numpy as np
 import pandas as pd
 from copulas.multivariate import GaussianMultivariate
 from copulas.bivariate import Clayton
+
+import copulae
+from copulae.archimedean import ClaytonCopula
+from copulae.elliptical import GaussianCopula
+
 from scipy.stats import kendalltau
 
 def fit_copula(x: np.ndarray, y: np.ndarray):
@@ -21,20 +26,21 @@ def fit_copula(x: np.ndarray, y: np.ndarray):
 
     try:
         # Fit Gaussian copula
-        #g_cop = GaussianMultivariate()
-        #g_cop.fit(pd.DataFrame(uv, columns=['u', 'v']))
-        #log_likelihood_g = np.mean(g_cop.log_likelihood(pd.DataFrame(uv, columns=['u', 'v'])))
-        #results["gaussian"] = {"loglik":log_likelihood_g}
+        g_cop = GaussianCopula()
+        g_cop.fit(pd.DataFrame(uv, columns=['u', 'v']))
+        log_likelihood_g = g_cop.log_lik(pd.DataFrame(uv, columns=['u', 'v']))
+        results["gaussian"] = {"loglik":log_likelihood_g}
 
         # Fit Clayton copula
-        c_cop = Clayton()
+        c_cop = ClaytonCopula()
         c_cop.fit(pd.DataFrame(uv, columns=['u', 'v']))
-        log_likelihood_c = np.mean(c_cop.log_likelihood(pd.DataFrame(uv, columns=['u', 'v'])))
+        log_likelihood_c = c_cop.log_lik(pd.DataFrame(uv, columns=['u', 'v']))
         results["clayton"] = {"loglik":log_likelihood_c}
 
         # Kendall's tau
         tau, _ = kendalltau(x, y)
         results["kendall_tau"] = tau
+        print(f"Fitted copulas: Gaussian log-lik={log_likelihood_g}, Clayton log-lik={log_likelihood_c}, Kendall's tau={tau}")
     except Exception as e:
         print(f"Error fitting copula: {e}")
         return None
@@ -51,8 +57,8 @@ def copula_dependency_score(x: np.ndarray, y: np.ndarray):
     gaussian_weight = 0.6
     clayton_weight = 0.4
     composite_score = (
-        #gaussian_weight * copula_results["gaussian"]["loglik"] +
-        copula_results["clayton"]["loglik"]
+        gaussian_weight * copula_results["gaussian"]["loglik"] +
+        clayton_weight * copula_results["clayton"]["loglik"]
     )
 
     # Multiply by |Kendalll's Tau| to emphasize monotonic relationships (stronger rank correlation)
