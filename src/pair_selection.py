@@ -5,6 +5,7 @@ from statsmodels.tsa.stattools import coint
 from itertools import combinations
 
 from config import ETFS_DIR, PROCESSED_DIR
+from copula_utils import copula_dependency_score
 
 def load_data():
     prices = pd.read_csv(os.path.join(PROCESSED_DIR, "cleaned_prices.csv"), index_col=0, parse_dates=True)
@@ -14,10 +15,10 @@ def load_data():
 def compute_correlations(log_returns):
     return log_returns.corr()
 
-def filter_top_percentile(corr_matrix, percentile: int=95):
+def filter_top_percentile(corr_matrix, percentile):
     # Get pairs of ETFs with correlation above the specified percentile for all tickers
     threshold = np.percentile(corr_matrix.values.flatten(), percentile)
-    print(f"Correlation threshold for top {percentile} percentile: {threshold:.4f}")
+    
     high_corr_pairs = [(corr_matrix.index[i], corr_matrix.columns[j], corr_matrix.values[i, j]) 
                        for i in range(corr_matrix.shape[0]) 
                        for j in range(i+1, corr_matrix.shape[1]) 
@@ -27,7 +28,7 @@ def filter_top_percentile(corr_matrix, percentile: int=95):
     pairs_df = pairs_df.sort_values(by='Correlation', ascending=False).reset_index(drop=True)
     return pairs_df
 
-def perform_cointegration_test(prices, pairs_df, significance_level: float =0.05):
+def perform_cointegration_test(prices, pairs_df, significance_level):
     coint_results = []
     for _, row in pairs_df.iterrows():
         etf1, etf2 = row["ETF1"], row["ETF2"]
@@ -39,18 +40,32 @@ def perform_cointegration_test(prices, pairs_df, significance_level: float =0.05
     coint_df = pd.DataFrame(coint_results, columns=['ETF1', 'ETF2', 'Correlation', 'P-Value'])
     return coint_df.sort_values(by='P-Value').reset_index(drop=True)
 
-def run_pair_selection_pipeline(percentile: int =95, significance_level: float =0.05):
+def add_copula_scores(log_returns, coint_df):
+    scores = []
+    for _, row in coint_df.iterrows():
+        etf1, etf2 = row["ETF1"], row["ETF2"]
+        x, y = log_returns[etf1].values, log_returns[etf2].values
+        scores.append(copula_dependency_score(x, y))
+    coint_df['Copula_Score'] = scores
+    coint_df = coint_df.sort_values(by='Copula_Score', ascending=False).reset_index(drop=True)
+    return coint_df
+
+def run_pair_selection_pipeline(percentile: int, significance_level: float, use_copula: bool):
     prices, log_returns = load_data()
     corr_matrix = compute_correlations(log_returns)
     top_pairs_df = filter_top_percentile(corr_matrix, percentile=percentile)
     coint_pairs_df = perform_cointegration_test(prices, top_pairs_df, significance_level=significance_level)
     
     print(f"Identified {len(coint_pairs_df)} cointegrated pairs out of {len(top_pairs_df)} high-correlation pairs.")
+    if use_copula and not coint_pairs_df.empty:
+        print("Computing copula dependency scores...")
+        coint_pairs_df = add_copula_scores(log_returns, coint_pairs_df)
+        
 
     return coint_pairs_df
 
 if __name__ == "__main__":
-    pairs = run_pair_selection_pipeline(percentile=95, significance_level=0.25)
+    pairs = run_pair_selection_pipeline(percentile=65, significance_level=0.25, use_copula=True)
     print("==== Top 10 Selected Pairs ===")
     print(pairs.head(10))
     output_path = os.path.join(PROCESSED_DIR, "selected_pairs.csv")

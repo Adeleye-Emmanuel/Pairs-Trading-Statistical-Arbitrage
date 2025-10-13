@@ -20,21 +20,24 @@ def fit_copula(x: np.ndarray, y: np.ndarray):
     # Convert data to uniform margins using rank transformation
     u = (pd.Series(x).rank(method='average') - 0.5)/len(x)
     v = (pd.Series(y).rank(method='average') - 0.5)/len(y)
+    u, v = np.clip(u, 1e-6, 1-1e-6), np.clip(v, 1e-6, 1-1e-6)  # Avoid exact 0 or 1
     uv = np.column_stack((u, v))   
     
     results = {}
 
     try:
         # Fit Gaussian copula
-        g_cop = GaussianCopula()
-        g_cop.fit(pd.DataFrame(uv, columns=['u', 'v']))
+        g_cop = GaussianCopula() # linear dependency capture
+        g_cop = g_cop.fit(pd.DataFrame(uv, columns=['u', 'v']))
         log_likelihood_g = g_cop.log_lik(pd.DataFrame(uv, columns=['u', 'v']))
+        log_likelihood_g /= len(x)  # Normalize by number of observations
         results["gaussian"] = {"loglik":log_likelihood_g}
 
         # Fit Clayton copula
-        c_cop = ClaytonCopula()
-        c_cop.fit(pd.DataFrame(uv, columns=['u', 'v']))
+        c_cop = ClaytonCopula() # adding risk (lower tail dependency) aware dependency capture
+        c_cop = c_cop.fit(pd.DataFrame(uv, columns=['u', 'v']))
         log_likelihood_c = c_cop.log_lik(pd.DataFrame(uv, columns=['u', 'v']))
+        log_likelihood_c /= len(x)  # Normalize by number of observations
         results["clayton"] = {"loglik":log_likelihood_c}
 
         # Kendall's tau
