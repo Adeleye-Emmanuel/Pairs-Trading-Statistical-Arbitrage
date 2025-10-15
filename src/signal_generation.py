@@ -193,6 +193,53 @@ def compute_pnl(df_signals: pd.DataFrame,
     print("PnL Computation Completed.")
     return pd.DataFrame(summary)
 
+def evaluate_performance(pnl_df: pd.DataFrame, notional: float=1_000_000, risk_free_rate: float=0.02):
+    """
+    Evaluate performance metrics from the pnl dataframe.
+    """
+    print("=====================Evaluating Performance=====================")
+    
+    daily_pnl = pnl_df["daily_pnl"]
+    cumulative_pnl = pnl_df["cumulative_pnl"]
+
+    # Returns
+    daily_return = daily_pnl / (notional * 2)  # since notional is per leg    
+    annualized_return = daily_return.mean() * 252
+    total_return = cumulative_pnl.iloc[-1] / (notional*2) if not cumulative_pnl.empty else 0.0
+    
+    # Volatility and Risk-Adjusted Metrics
+    annualized_vol = daily_return.std() * np.sqrt(252)
+    sharpe_ratio = (annualized_return - risk_free_rate) / annualized_vol if annualized_vol != 0 else 0.0
+
+    # Drawdown
+
+    cumulative_equity = (1+daily_return).cumprod()
+    high_water_mark = cumulative_equity.cummax()
+    drawdown = (cumulative_equity / high_water_mark) - 1
+    max_drawdown = drawdown.min() if not drawdown.empty else 0.0
+    drawdown_duration = (drawdown != 0).astype(int).groupby((drawdown == 0).astype(int).cumsum()).cumsum().max()
+
+    # Calmar Ratio  
+    calmar_ratio = annualized_return / abs(max_drawdown) if max_drawdown != 0 else np.inf
+
+    # Trade Statistics
+    num_trades = pnl_df["num_trades"].iloc[0] if not pnl_df.empty else 0
+    total_tc = pnl_df["total_tc"].iloc[0] if not pnl_df.empty else 0.0
+
+    performance = {
+        "Total Return": total_return * 100,
+        "Annualized Return": annualized_return * 100,
+        "Annualized Volatility": annualized_vol * 100,
+        "Sharpe Ratio": sharpe_ratio,
+        "Max Drawdown": max_drawdown * 100,
+        "Drawdown Duration (days)": drawdown_duration,
+        "Calmar Ratio": calmar_ratio,
+        "Number of Trades": num_trades,
+        "Total Transaction Costs": total_tc
+    }
+
+    print("Performance Evaluation Completed.")
+    return performance
 
 # Utility: quick run for single pair
 def analyze_pair(prices, etf1: str, etf2: str, hedge_ratio: float = None,
@@ -213,12 +260,19 @@ def analyze_pair(prices, etf1: str, etf2: str, hedge_ratio: float = None,
     half_life = half_life_ou(spread)
     signals = generate_signals(spread, entry_z=entry_z, exit_z=exit_z, window=window, max_holding_days=max_holding_days)
     pnl = compute_pnl(signals, prices, etf1, etf2, beta, notional=notional, tc_bps=tc_bps)
-    
+    performance = evaluate_performance(pnl, notional=notional)
+
+    print(f"\n---------------------Performance Summary for {etf1} and {etf2}---------------------")
+    for k, v in performance.items():
+        print(f"{k}: {v}")
+    print("------------------------------------------------------------\n")
     return {
-        "beta": beta,
-        "spread": spread,
-        "adf": adf,
+        "hedge_ratio": beta,
+        "adf_test": adf,
         "half_life": half_life,
+        "spread": spread,
         "signals": signals,
-        "pnl": pnl
+        "pnl": pnl,
+        "performance": performance
     }
+
