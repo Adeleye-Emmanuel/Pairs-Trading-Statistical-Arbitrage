@@ -6,31 +6,42 @@ from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
 from statsmodels.tsa.stattools import adfuller
 
-def estimate_hedge_ratio(log_returns: pd.DataFrame, etf1: str, etf2: str) -> float:
+def estimate_hedge_ratio(data: pd.DataFrame, etf1: str, etf2: str, mode: str = "prices") -> float:
     """
     Estimate the hedge ratio between two ETFs using linear regression.
     """
-    y = log_returns[etf1].dropna()
-    X = log_returns[etf2].dropna()
+    print(f"=====================Estimating Hedge Ratio for {etf1} and {etf2}=====================")
+    if mode == "prices":
+        y = np.log(data[etf1].dropna())
+        X = np.log(data[etf2].dropna())
+    else:  # default to returns
+        y = data[etf1].dropna()
+        X = data[etf2].dropna()
+
     common_index = y.index.intersection(X.index)
     y, X = y.loc[common_index], X.loc[common_index]
     X = add_constant(X)
     model = OLS(y, X).fit()
     print(f"Model Summary for {etf1} ~ {etf2}:\n{model.summary()}")
-    beta = model.params[etf2]
+    beta = model.params.get(etf2, np.nan)
     return float(beta)
 
 def compute_spread(log_returns: pd.DataFrame, etf1: str, etf2: str, hedge_ratio: float) -> pd.Series:
+    print(f"=====================Computing Spread for {etf1} and {etf2}=====================")
     if hedge_ratio is None:
         hedge_ratio = estimate_hedge_ratio(log_returns, etf1, etf2)
     
     idx = log_returns[etf1].index.union(log_returns[etf2].index).sort_values()
-    y_a = log_returns[etf1].reindex(idx).fillna(method='ffill').fillna(method='bfill')
-    x_a = log_returns[etf2].reindex(idx).fillna(method='ffill').fillna(method='bfill')
-    spread = y_a - hedge_ratio * x_a
+    y_a = log_returns[etf1].reindex(idx)
+    x_a = log_returns[etf2].reindex(idx)
+    aligned_data = pd.DataFrame({etf1: y_a, etf2: x_a}).dropna()
+    spread = aligned_data[etf1] - hedge_ratio * aligned_data[etf2]
+    print(f"Spread NaNs: {spread.isnull().sum()}")
+
     return spread
 
 def test_stationarity(series: pd.Series, significance_level: float = 0.05) -> Tuple[bool, Dict]:
+    print("=====================Performing ADF Test=====================")
     result = adfuller(series.dropna())
     p_value = result[1]
     is_stationary = p_value < significance_level
@@ -41,28 +52,42 @@ def test_stationarity(series: pd.Series, significance_level: float = 0.05) -> Tu
         'Number of Observations': result[3],
         'Critical Values': result[4]
     }
+    print("Stationarity Tests Completed.")
     return is_stationary, adf_stats
 
 def half_life_ou(spread: pd.Series) -> float:
     """
     Estimating the half life of mean regression for the spread using Ornstein-Uhlenbeck process.
     """
+    print("=====================Computing Half-Life of Mean Reversion=====================")
     spread_lag = spread.shift(1).dropna()
     spread_ret = spread.diff().dropna()
     common_index = spread_lag.index.intersection(spread_ret.index)
-    spread_lag, spread_ret = spread_lag.loc[common_index], spread_ret.loc[common_index]
-    X = add_constant(spread_lag)
-    model = OLS(spread_ret, X).fit()
-    theta = -model.params[1]
+    X = add_constant(spread_lag.loc[common_index])
+    model = OLS(spread_ret.loc[common_index], X).fit()
+    theta = -model.params.iloc[1]
     if theta <= 0:
-        return np.inf
-    half_life = np.log(2) / theta
-    return half_life
+        half_life = np.inf
+        print("Warning: Non-positive theta estimated, half-life set to infinity.")
+    else:
+        half_life = np.log(2) / theta
+        print(f"Half-Life: {half_life} days")
+    
+    print("Half-Life Computed.")
 
-def z_score(spread: pd.Series, window: int) -> Tuple[pd.Series, pd.Series]:
+    return float(half_life)
+
+def z_score(spread: pd.Series, window: int):
+    print("=====================Computing Z-Score=====================")
     mu = spread.rolling(window=window, min_periods=int(window*0.6)).mean()
     sigma = spread.rolling(window=window, min_periods=int(window*0.6)).std(ddof=0)
+
     z_score = (spread - mu) / sigma
+    
+    print("Z-Score Computed.")
+    print(f"Z-Score Nans: {z_score.isnull().sum()}")
+    print("==============================================")
+
     return z_score
 
 def generate_signals(spread: pd.Series,
@@ -70,67 +95,64 @@ def generate_signals(spread: pd.Series,
                      exit_z: float=0.5,
                      window: int=60,
                      max_holding_days: int=252) -> pd.DataFrame:
-    signals = spread.copy()
-    z_scores = z_score(signals, window=window)
-    df = pd.DataFrame({"spread": spread, "z_score": z_scores})
+    
+    print("Generating Trading Signals...")
+    z_scores = z_score(spread, window=window)
+    df = pd.DataFrame({"spread": spread, "z_score": z_scores}).dropna()
+
+    if df.empty:
+        print("ERROR: DataFrame is empty. No signals generated after dropping NaN.")
+        return pd.DataFrame()
+    
     df['position'] = 0
     df["entry"] = False
     df["exit"] = False
     df["entry_price_spread"] = np.nan
-    df["entry_index"] = pd.NaT
+    df["entry_date"] = pd.NaT
 
     position = 0
     entry_idx = None
-    entry_i = None
+    entry_date = None
 
     for i in range(len(df)):
         date = df.index[i]
-        zt = df["z"].iat[i]
+        zt = df["z_score"].iat[i]
         if position == 0:
             if zt >= entry_z:
                 position = -1
                 df.at[date, "entry"] = True
                 df.at[date, "entry_price_spread"] = df.at[date, "spread"]
-                df.at[date, "entry_index"] = date
+                df.at[date, "entry_date"] = date
                 entry_idx = i
-                entry_i = date
+                entry_date = date
             elif zt <= -entry_z:
                 position = 1
                 df.at[date, "entry"] = True
                 df.at[date, "entry_price_spread"] = df.at[date, "spread"]
-                df.at[date, "entry_index"] = date
+                df.at[date, "entry_date"] = date
                 entry_idx = i
-                entry_i = date
+                entry_date = date
+
         else:
-            # check exit on mean reversion
-            if abs(zt) <= exit_z:
+            # check exit on mean reversion or max holding period
+            exit_on_mean_reversion  = abs(zt) <= exit_z
+            exit_on_max_holding = (i - entry_idx) >= max_holding_days
+            if exit_on_mean_reversion or exit_on_max_holding:
                 df.at[date, "exit"] = True
-                df.at[date, "entry_index"] = df.at[df.index[entry_idx], "entry_index"]
+                df.at[date, "entry_date"] = df.at[df.index[entry_idx], "entry_date"]
                 position = 0
                 entry_idx = None
-                entry_i = None
-            
-            else:
-                # check exit on max holding period
-                if abs(zt) <= exit_z:
-                    df.at[date, "exit"] = True
-                    df.at[date, "entry_index"] = df.at[df.index[entry_idx], "entry_index"]
-                    position = 0
-                    entry_idx = None
-                    entry_i = None
-                else:
-                    if (i-entry_idx) >= max_holding_days:
-                        df.at[date, "exit"] = True
-                        df.at[date, "entry_index"] = df.at[df.index[entry_idx], "entry_index"]
-                        position = 0
-                        entry_idx = None
-                        entry_i = None
+                entry_date = None
+
         df.at[date, "position"] = position
 
-    df["position"] = df["position"].ffill().fillna(0).astype(int)
+    print("Signal Generation Completed.")
+    print(df["entry"].value_counts())
     return df
 
-def compute_pnl(df_signals: pd.DataFrame, log_returns, etf1: str, etf2: str, 
+def compute_pnl(df_signals: pd.DataFrame, 
+                prices_df: pd.DataFrame, 
+                etf1: str, etf2: str, 
                 hedge_ratio:float, 
                 notional: float=1_000_000,
                 tc_bps: float=0.0) -> pd.DataFrame:
@@ -140,27 +162,63 @@ def compute_pnl(df_signals: pd.DataFrame, log_returns, etf1: str, etf2: str,
     - tc_bps: round-trip transaction cost in basis points (applied on trade open and close)
     Assumes position column: +1 long spread (long y, short x*beta), -1 short spread (short y, long x*beta)
     """
+    print("=====================Computing PnL=====================")
     idx = df_signals.index
-    y = log_returns[etf1].reindex(idx)
-    x = log_returns[etf2].reindex(idx)
+    y = prices_df[etf1].reindex(idx).fillna(0)
+    x = prices_df[etf2].reindex(idx).fillna(0)
+
+    # Using simple daily returns for PnL calculation
+    ret_y = y.pct_change().fillna(0)
+    ret_x = x.pct_change().fillna(0)
 
     # position series
     pos = df_signals["position"].reindex(idx).ffill().fillna(0)
+    pos_shift= pos.shift(1).fillna(0) # Avoids lookahead bias
 
-    # PnL per period for spread position
-    # pnl = pos * (notional * y - notional * hedge_ratio * x)
-    # Apply tcost when position changes
-    trades = pos.diff().fillna(0).abs() > 0
-    tc = trades.astype(float) * (tc_bps/10000.0) * notional * 2
-    pnl = pos * (notional * y - notional * hedge_ratio * x) - tc
+    turnover = pos_shift.diff().abs().fillna(0)
+    tc = turnover * (tc_bps/10000.0) * notional * 2  # round-trip cost
+
+    daily_spread_return = ret_y - hedge_ratio * ret_x
+    pnl = pos_shift * daily_spread_return * notional * 2 - tc
     cum_pnl = pnl.cumsum()
+
     summary = {
         "daily_pnl": pnl,
         "cumulative_pnl": cum_pnl,
         "total_return": cum_pnl.iloc[-1] / (notional * 2) if not cum_pnl.empty else 0.0,
-        "num_trades": trades.sum(),
-        "total_tc": tc.sum()        
+        "num_trades": turnover.sum()/2, # Divide by 2 because a full cycle (entry/exit) is 2 turnover points
+        "total_tc": tc.sum()         
     }
 
+    print("PnL Computation Completed.")
     return pd.DataFrame(summary)
 
+
+# Utility: quick run for single pair
+def analyze_pair(prices, etf1: str, etf2: str, hedge_ratio: float = None,
+                 window: int = 60, entry_z: float = 2.0, exit_z: float = 0.5,
+                 notional: float = 1_000_000, tc_bps: float = 2.0, max_holding_days: int = 252,
+                 beta_mode: str = "prices") -> Dict:
+    """
+    Convenience wrapper that computes hedge ratio, spread, diagnostics, signals and pnl summary.
+    Returns dict with diagnostics and dataframes (spread, signals, pnl series).
+    """
+    # estimate hedge ratio if not provided
+
+    beta = hedge_ratio if hedge_ratio is not None else estimate_hedge_ratio(prices, etf1, etf2, mode=beta_mode)
+
+    log_returns = np.log(prices).diff().dropna()
+    spread = compute_spread(log_returns, etf1, etf2, hedge_ratio=beta)
+    adf = test_stationarity(spread)
+    half_life = half_life_ou(spread)
+    signals = generate_signals(spread, entry_z=entry_z, exit_z=exit_z, window=window, max_holding_days=max_holding_days)
+    pnl = compute_pnl(signals, prices, etf1, etf2, beta, notional=notional, tc_bps=tc_bps)
+    
+    return {
+        "beta": beta,
+        "spread": spread,
+        "adf": adf,
+        "half_life": half_life,
+        "signals": signals,
+        "pnl": pnl
+    }

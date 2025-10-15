@@ -4,6 +4,8 @@ import pandas as pd
 from statsmodels.tsa.stattools import coint
 from itertools import combinations
 
+from sklearn.preprocessing import MinMaxScaler
+
 from config import ETFS_DIR, PROCESSED_DIR
 from copula_utils import copula_dependency_score
 
@@ -71,29 +73,34 @@ def run_pair_selection_pipeline(percentile: int, significance_level: float, use_
     prices, log_returns = load_data()
     corr_matrix = compute_correlations(log_returns)
     top_pairs_df = filter_top_percentile(corr_matrix, percentile=percentile)
-    coint_pairs_df = perform_cointegration_test(prices, top_pairs_df, significance_level=significance_level)
-    
+    coint_pairs_df = perform_cointegration_test(prices, top_pairs_df, significance_level=significance_level) 
+
     print(f"Identified {len(coint_pairs_df)} cointegrated pairs out of {len(top_pairs_df)} high-correlation pairs.")
     if use_copula and not coint_pairs_df.empty:
         print("Computing copula dependency scores...")
         coint_cop_pairs_df = add_copula_scores(log_returns, coint_pairs_df)
         
-    # Composite scoring of correlation, cointegration p-value, and copula score
-        coint_cop_pairs_df['Composite_Score'] = (
-            coint_cop_pairs_df['Correlation'] * 0.4 + 
-            (1 - coint_cop_pairs_df['P-Value']) * 0.3 + # to invert p-value (lower is better)
-            (coint_cop_pairs_df['Copula_Score']) * 0.3
-        )
-        pair_selection_scores = coint_cop_pairs_df.sort_values(by='Composite_Score', ascending=False).reset_index(drop=True)
     else:
         coint_cop_pairs_df = coint_pairs_df
         coint_cop_pairs_df['Copula_Score'] = np.nan
-        coint_cop_pairs_df['Composite_Score'] = (
-            coint_cop_pairs_df['Correlation'] * 0.6 + 
-            (1 - coint_cop_pairs_df['P-Value']) * 0.4
-        )
-        pair_selection_scores = coint_cop_pairs_df.sort_values(by='Composite_Score', ascending=False).reset_index(drop=True)
+        print("Skipped copula scoring.")   
+    
+    scaler = MinMaxScaler()
+    scaled_features = scaler.fit_transform(coint_cop_pairs_df[['Correlation', 'P-Value']].assign(
+        Copula_Score=coint_cop_pairs_df['Copula_Score'].fillna(0)
+    ))
+    coint_cop_pairs_df[["Corr_Scaled", "Pvalue_Scaled", "Copula_Scaled"]] = scaled_features 
+    coint_cop_pairs_df["Pvalue_Scaled"] = 1 - coint_cop_pairs_df["Pvalue_Scaled"]
 
+    # Weights: Correlation 20%, P-Value 50%, Copula 30%
+    weights = {"Corr_Scaled": 0.2, "Pvalue_Scaled": 0.5, "Copula_Scaled": 0.3}
+    coint_cop_pairs_df["Selection_Score"] = (
+        coint_cop_pairs_df["Corr_Scaled"] * weights["Corr_Scaled"] +
+        coint_cop_pairs_df["Pvalue_Scaled"] * weights["Pvalue_Scaled"] +
+        coint_cop_pairs_df["Copula_Scaled"] * weights["Copula_Scaled"]
+    )
+
+    pair_selection_scores = coint_cop_pairs_df.sort_values(by="Selection_Score", ascending=False).reset_index(drop=True)
     return pair_selection_scores
 
 if __name__ == "__main__":
