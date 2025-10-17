@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from copulae.archimedean import ClaytonCopula, GumbelCopula
+from copulae.archimedean import ClaytonCopula, GumbelCopula, FrankCopula
 from copulae.elliptical import StudentCopula, GaussianCopula
 from scipy.stats import t as student_t, norm
 import warnings
@@ -119,34 +119,29 @@ class CopulaModel:
             uv = np.column_stack((u, v))
             
             copula_models = {}
+            copula_classes = {
+                "Clayton": (ClaytonCopula, "clayton"),
+                "Gumbel": (GumbelCopula, "gumbel"),
+                "Frank": (FrankCopula, "frank"),
+                "Gaussian": (GaussianCopula, "gaussian"),
+                "Student_t": (StudentCopula, "student_t")
+                    }
 
-            try:
-                t_cop = StudentCopula(dim=2)
-                t_cop.fit(uv)
-                t_loglik = t_cop.log_lik(uv)
-                lower_tail, upper_tail = self.calculate_tail_dependence(t_cop, "student_t", uv)
-                copula_models["Student_t"] = {
-                    "copula": t_cop,
-                    "log_likelihood": t_loglik,
-                    "lower_tail_dep": lower_tail,
-                    "upper_tail_dep": upper_tail
-                }
+            for name, (cls, short_name) in copula_classes.items():
+                try:
+                    cop = cls(dim=2)
+                    cop.fit(uv)
+                    loglik = cop.log_lik(uv)
+                    lower_tail, upper_tail = self.calculate_tail_dependence(cop, short_name, uv)
+                    copula_models[name] = {
+                        "copula": cop,
+                        "log_likelihood": loglik,
+                        "lower_tail_dep": lower_tail,
+                        "upper_tail_dep": upper_tail
+                    }
 
-            except Exception as e:
-                print(f"Student t-copula fitting failed for {pair_name}: {e}")
-            try:
-                c_cop = ClaytonCopula(dim=2)
-                c_cop.fit(uv)
-                c_loglik = c_cop.log_lik(uv)
-                lower_tail, upper_tail = self.calculate_tail_dependence(c_cop, "clayton", uv)
-                copula_models["Clayton"] = {
-                    "copula": c_cop,
-                    "log_likelihood": c_loglik,
-                    "lower_tail_dep": lower_tail,
-                    "upper_tail_dep": upper_tail
-                }   
-            except Exception as e:
-                print(f"Clayton copula fitting failed for {pair_name}: {e}")
+                except Exception as e:
+                    print(f"Fitted {pair_name}: {name} copula, LL: {loglik:.2f}, Lower tail: {lower_tail:.3f}")    
 
             if not copula_models:
                 raise ValueError("No copula models were successfully fitted.")
