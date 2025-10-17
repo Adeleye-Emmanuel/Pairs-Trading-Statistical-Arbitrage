@@ -18,9 +18,16 @@ def download_etfs(etf_list: List[str], start_date: str, end_date: str, interval:
     if not os.path.exists(output_dir):
         os.makedirs(output_dir) # Ensure the directory exists
 
+    downloaded_etfs = []
     for etf in etf_list:
         print(f"Downloading data for {etf}...")
-        data = yf.download(etf, start=start_date, end=end_date, interval=interval) # Download data using yfinance
+        
+        try:
+            data = yf.download(etf, start=start_date, end=end_date, interval=interval) # Download data using yfinance
+        except Exception as e:
+            print(f"Error downloading {etf}: {e}")
+            continue
+        downloaded_etfs.append(etf)
         try:
             prices = data['Adj Close']
         except Exception: # Fallback if 'Adj Close' is not available
@@ -39,10 +46,9 @@ def download_etfs(etf_list: List[str], start_date: str, end_date: str, interval:
         else:
             print(f"No data found for {etf}")
 
-    
     print(f"Download completed for {len(etf_list)} ETFs. Merging data...")    
     full_df = pd.DataFrame()
-    for etf in etf_list:
+    for etf in downloaded_etfs:
         file_path = os.path.join(output_dir, f"{etf}.csv")
         if os.path.exists(file_path):
             etf_data = pd.read_csv(file_path, index_col=0, parse_dates=True)
@@ -60,7 +66,27 @@ def download_etfs(etf_list: List[str], start_date: str, end_date: str, interval:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download historical ETF data and save as CSV files.")
-    parser.add_argument("--etfs", nargs='+', default=["SPY","QQQ","EFA","EEM","EWJ","FXI","VEU","AGG","GLD","LQD"], help="List of ETF ticker symbols.")
+
+    # Define the 100 tickers here:
+    etf_tickers = [
+        "SPY", "QQQ", "DIA", "IWM", "VTI", "VOO", "IWDA.L", "VXUS", "ACWI", "BND", 
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "ADBE", "CRM", "INTC", 
+        "JPM", "BAC", "WFC", "CAT", "GE", "MMM", "BA", "IBM", "HON",
+        "JNJ", "PFE", "UNH", "PG", "KO", "PEP", "WMT", "CVS", "MRK", "ABBV",
+        "XOM", "CVX", "SLB", "LIN", "BHP", "VALE", "RIO", "ECL", "APD",
+        "XLK", "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI", "XLB", "XLU",
+        "EFA", "EEM", "FXI", "EWJ", "VEU", "VWO", "EWG", "EWH", "EWC", "EWA",
+        "AGG", "LQD", "TLT", "SHY", "GLD", "SLV", "USO", "UNG", "DBC", "PALL",
+        "MDY", "IJR", "ARKK", "UBER", "DIS", "NFLX", "SBUX", "COST", "TGT", "HD"
+        "GILD", "CMCSA", "BILI", "VIZ",
+        "EWZ", "INDA", "RSX", "EWW", 
+        "HYG", "TIP",
+        "DBA", "WOOD",
+        "VNQ", "REM"
+
+    ]
+
+    parser.add_argument("--etfs", nargs='+', default=etf_tickers, help="List of ETF ticker symbols.")
     parser.add_argument("--start", type=str, default="2015-01-01", help="Start date in 'YYYY-MM-DD' format.")
     parser.add_argument("--end", type=str, default=None, help="End date in 'YYYY-MM-DD' format.")
     parser.add_argument("--interval", type=str, default="1d", help="Data interval (e.g., '1d', '1wk', '1mo').")
