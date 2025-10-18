@@ -8,7 +8,7 @@ from itertools import combinations
 from sklearn.preprocessing import MinMaxScaler
 
 from config import ETFS_DIR, PROCESSED_DIR
-from copula_utils import CopulaModel
+from src.copula_model import CopulaModel
 
 class PairSelector():
 
@@ -110,7 +110,7 @@ class PairSelector():
             return None
         
         score_vector = {
-            'half_life': 1 / (1 + coint_result['Half_life']), 
+            'mean_reversion_speed': 1 / (1 + coint_result['Half_life']), 
             'coint_strength': -np.log(coint_result['P-Value']),  
             'copula_fit': copula_model['log_likelihood'],  
             'tail_safety': 1 - copula_model['lower_tail_dependence']  
@@ -129,7 +129,7 @@ class PairSelector():
     def select_pareto_frontier(self, qualified_pairs):
 
         metrics = np.array([
-            [p["half_life"], p["coint_strength"], p["copula_fit"], p["tail_safety"]]
+            [p["mean_reversion_speed"], p["coint_strength"], p["copula_fit"], p["tail_safety"]]
             for p in qualified_pairs
         ])
 
