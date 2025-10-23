@@ -4,6 +4,8 @@ import pandas as pd
 from statsmodels.tsa.stattools import coint
 from statsmodels.api import OLS, add_constant
 from itertools import combinations
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from sklearn.preprocessing import MinMaxScaler
 
@@ -145,6 +147,9 @@ class PairSelector():
                     break
         pareto_pairs = [qualified_pairs[i] for i in range(len(qualified_pairs)) if pareto_mask[i]]
         return pareto_pairs
+    
+    def get_copula_model(self):
+        return self.copula_model
 
     def run_selection(self):
         corr_matrix = self.compute_correlations()
@@ -183,7 +188,7 @@ class PairSelector():
         self.selected_pairs = pareto_pairs
         print(f"Selected {len(pareto_pairs)} final pairs")
 
-        return final_df
+        return self.selected_pairs
     
 
 if __name__ == "__main__":
@@ -191,5 +196,7 @@ if __name__ == "__main__":
     returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
     selector = PairSelector(prices, returns)
     selected_pairs = selector.run_selection()
+    print(type(selected_pairs))
     print(f"Selected {len(selected_pairs)} pairs")
     print(selected_pairs)
+    
