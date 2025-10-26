@@ -55,14 +55,14 @@ class CopulaModel:
                 from scipy.stats import t as t_dist
                 
                 # Get parameters - they're stored as a tuple or list
-                params = copula.params
-                if hasattr(params, '__len__') and len(params) >= 2:
-                    rho = params[0]  # correlation parameter
-                    df = params[1]   # degrees of freedom
+                params_obj = copula.params
+                df = float(params_obj.df)   # degrees of freedom
+                
+                # if hasattr(params_obj, '__len__') and len(params_obj) >= 2:
+                if isinstance(params_obj.rho, np.ndarray):
+                    rho = float(params_obj.rho[0])
                 else:
-                    # Handle case where params might be a single value
-                    rho = params if isinstance(params, (int, float)) else 0.5
-                    df = 4.0  # default degrees of freedom
+                    rho = float(params_obj.rho)  # correlation parameter
                 
                 # Calculate tail dependence for Student's t-copula
                 if df > 0 and abs(rho) < 1:
@@ -93,7 +93,47 @@ class CopulaModel:
             print(f"Error calculating tail dependence: {e}")
             return 0.0, 0.0        
     
-    
+    def validate_copula_params(self, copula, copula_type, pair_name):
+        try:
+            if copula_type == "studemt_t":
+                params_obj = copula.params
+                df = float(params_obj.df)
+
+                if isinstance(params_obj.rho, np.ndarray):
+                    rho = float(params_obj.rho[0])
+                else:
+                    rho = float(params_obj.rho)    
+
+                # Checking if df is in valid range
+                if df <=2:
+                    print(f"Rejecting {pair_name}: df={df:.2f} too low (need >2 for finite variance)")
+                    return False
+                if df > 100:
+                    print(f"Warning {pair_name}: df={df:.0f} very high (essentially gaussian)")
+
+                # Checking correlation is meaningful
+                if abs(rho) < 0.3:
+                    print(f"  Rejecting {pair_name}: |rho|={abs(rho):.2f} too low (weak dependence)")
+                    return False
+                
+                if abs(rho) > 0.99:
+                    print(f"  Rejecting {pair_name}: |rho|={abs(rho):.4f} too high (near-perfect correlation)")
+                    return False 
+                
+            elif copula_type == "gaussian":
+                if hasattr(copula.params, "rho"):
+                    rho = float(copula.params.rho[0]) if isinstance(copula.params.rho, np.ndarray) else float(copula.params.rho)
+                else:
+                    rho = float(copula.params[0,1]) if hasattr(copula.params, "shape") else 0.5
+                if abs(rho) < 0.3:
+                    print(f"  Rejecting {pair_name}: |rho|={abs(rho):.2f} too low")
+                    return False 
+
+            return True
+        except Exception as e:
+            print(f"    Warning: Paramter validation failed for {pair_name}: {e}")
+            return False
+        
     def fit_copula(self, returns_1, returns_2, pair_name):
         # Fitting complete bivariate copula model for a pair of return series
         try:
@@ -141,7 +181,7 @@ class CopulaModel:
                     }
 
                 except Exception as e:
-                    print(f"Fitted {pair_name}: {name} copula, LL: {loglik:.2f}, Lower tail: {lower_tail:.3f}")    
+                    continue
 
             if not copula_models:
                 raise ValueError("No copula models were successfully fitted.")
@@ -149,6 +189,9 @@ class CopulaModel:
             best_copula_name = max(copula_models.keys(), key=lambda x: copula_models[x]["log_likelihood"])
             best_copula = copula_models[best_copula_name]
             
+            if not self.validate_copula_params(best_copula["copula"], best_copula_name.lower(), pair_name):
+                return None
+
             if not np.isfinite(best_copula["log_likelihood"]):
                 raise ValueError(f"Non-finite log-likelihood; {best_copula_name} copula fit likely failed for {pair_name}.")
             
@@ -166,7 +209,6 @@ class CopulaModel:
 
             self.fitted_models [pair_name] = model
 
-
             ll_val = float(np.ravel(best_copula["log_likelihood"])[0])
             lt_val = float(np.ravel(best_copula["lower_tail_dep"]))
             print(f"Fitted {pair_name}: {best_copula_name} copula, LL: {ll_val:.2f}, Lower tail: {lt_val:.3f}")
@@ -177,7 +219,6 @@ class CopulaModel:
             print(f"Error fitting copula model for {pair_name}: {e}")
             return None
         
-
     def get_model(self, pair_name):
         return self.fitted_models.get(pair_name)
     
