@@ -20,7 +20,7 @@ class PairSelector():
 
         # Default split: 60% train, 40% test
         if train_end_date is None:
-            split_idx = int(len(prices_df)*0.6)
+            split_idx = int(len(prices_df)*0.75)
             self.train_end_date = prices_df.index[split_idx]
         else:
             self.train_end_date = pd.to_datetime(train_end_date)
