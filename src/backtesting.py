@@ -46,7 +46,7 @@ class Backtester:
         etf2 = pair_data["ETF2"]
         hedge_ratio = pair_data.get("Hedge_ratio", 1)
 
-        spread = prices[etf1] - hedge_ratio*[etf2]
+        spread = prices[etf1] - hedge_ratio * prices[etf2]
         return spread
     
     def calculate_position_size(self, pair_name, pair_data, current_date, portfolio_value):
@@ -189,7 +189,7 @@ class Backtester:
         print(f"Initial Capital: ${self.initial_capital:,.0f}")
         print(f"Risk per Trade: {self.risk_per_trade*100:.1f}%")
         print(f"Max Positions: {self.max_positions}")
-        print(f"Transaction Costs: {self.transaction_cost_bps} bps per side")
+        print(f"Transaction Costs: {self.tcost_bps} bps per side")
 
         all_trades = []
 
@@ -232,7 +232,7 @@ class Backtester:
                 del open_positions[p]
 
         # Filter to allowed trades only
-        executed_trades = trades_df[trades_df["aloowed"]].copy()
+        executed_trades = trades_df[trades_df["allowed"]].copy()
 
         print(f"\nTotal Trades Generated: {len(trades_df)}")
         print(f"Trades Executed (after position limit): {len(executed_trades)}")
@@ -337,7 +337,7 @@ class Backtester:
             'avg_holding_days': trades['holding_days'].mean(),
             'total_transaction_costs': trades['transaction_costs'].sum()
         }
-        
+         
         return metrics
     
     def print_summary(self):
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     test_prices, test_returns = selector.get_test_data()
     
     # Generate signals on test data
-    signal_gen = SignalGenerator(use_fitted_copula=True)
+    signal_gen = SignalGenerator()
     signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
 
     backtester = Backtester(
@@ -410,7 +410,7 @@ if __name__ == "__main__":
         selected_pairs=selected_pairs,
         initial_capital=100_000,
         tcost_bps=5,
-        risk_per_trade=0.02,
+        risk_per_trade=0.05,
         max_positions=5,
         lookback_volatility=90
     )
