@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from sklearn.preprocessing import MinMaxScaler
 
-from config import ETFS_DIR, PROCESSED_DIR
+from src.config import ETFS_DIR, PROCESSED_DIR
 from src.copula_model import CopulaModel
 
 class PairSelector():
@@ -18,23 +18,26 @@ class PairSelector():
         self.full_prices_df = prices_df
         self.full_returns_df = returns_df
 
-        # Default split: 60% train, 40% test
-        if train_end_date is None:
-            split_idx = int(len(prices_df)*0.75)
-            self.train_end_date = prices_df.index[split_idx]
-        else:
-            self.train_end_date = pd.to_datetime(train_end_date)
+        # # Default split: 75% train, 25% test
+        # if train_end_date is None:
+        #     split_idx = int(len(prices_df)*0.75)
+        #     self.train_end_date = prices_df.index[split_idx]
+        # else:
+        #     self.train_end_date = pd.to_datetime(train_end_date)
 
-        if test_start_date is None:
-            self.test_start_date = self.train_end_date
-        else:
-            self.test_start_date = pd.to_datetime(self.test_start_date)
-        
+        # if test_start_date is None:
+        #     self.test_start_date = self.train_end_date
+        # else:
+        #     self.test_start_date = pd.to_datetime(self.test_start_date)
+
+        self.train_end_date = pd.to_datetime("2024-12-31")
+        #self.test_end_date = pd.to_datetime("2024-12-31")
+
         # Splitting data
         self.train_prices_df = prices_df[:self.train_end_date]
         self.train_returns_df = prices_df[:self.train_end_date]
-        self.test_prices_df = prices_df[self.test_start_date:]
-        self.test_returns_df = prices_df[self.test_start_date:]
+        self.test_prices_df = prices_df[self.train_end_date:]
+        self.test_returns_df = prices_df[self.train_end_date:]
 
         print(f"\nTrain/Test Split:")
         print(f"  Training period: {self.train_prices_df.index[0]} to {self.train_prices_df.index[-1]}")

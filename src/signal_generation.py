@@ -8,7 +8,7 @@ from scipy.stats import t as student_t, norm
 from copulae.elliptical import StudentCopula
 from src.copula_model import *
 from src.pair_selection import *
-from config import ETFS_DIR, PROCESSED_DIR
+from src.config import ETFS_DIR, PROCESSED_DIR
 
 class SignalGenerator:
 
@@ -349,9 +349,10 @@ if __name__ == "__main__":
     returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
     selector = PairSelector(prices, returns)
     selected_pairs = selector.run_selection()
-
+    
+    test_prices, test_returns = selector.get_test_data()
     signal_gen = SignalGenerator()
-    all_signals = signal_gen.generate_batch_signals(prices, selected_pairs)
+    all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
     
     for pair_name, signals in all_signals.items():
         if signals is not None:

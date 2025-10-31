@@ -4,7 +4,7 @@ from datetime import datetime
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from config import PROCESSED_DIR
+from src.config import PROCESSED_DIR, BACKTEST_DIR
 
 class Backtester:
 
@@ -420,6 +420,6 @@ if __name__ == "__main__":
 
     # Saving results
     if len(trades_df) > 0:
-        trades_df.to_csv(os.path.join(PROCESSED_DIR, "backtest_trades.csv"), index=False)
-        equity_curve.to_csv(os.path.join(PROCESSED_DIR, "backtest_equity_curve.csv"), index=False)
-        print(f"\nResults saved to {PROCESSED_DIR}")
+        trades_df.to_csv(os.path.join(BACKTEST_DIR, "backtest_trades[2015-2024 on 2025].csv"), index=False)
+        equity_curve.to_csv(os.path.join(BACKTEST_DIR, "backtest_equity_curve [2015-2024 on 2025].csv"), index=False)
+        print(f"\nResults saved to {BACKTEST_DIR}")
