@@ -95,7 +95,7 @@ class CopulaModel:
     
     def validate_copula_params(self, copula, copula_type, pair_name):
         try:
-            if copula_type == "studemt_t":
+            if copula_type == "student_t":
                 params_obj = copula.params
                 df = float(params_obj.df)
 
@@ -160,9 +160,9 @@ class CopulaModel:
             
             copula_models = {}
             copula_classes = {
-                "Clayton": (ClaytonCopula, "clayton"),
-                "Gumbel": (GumbelCopula, "gumbel"),
-                "Frank": (FrankCopula, "frank"),
+                 #"Clayton": (ClaytonCopula, "clayton"),
+                 #"Gumbel": (GumbelCopula, "gumbel"),
+                 #"Frank": (FrankCopula, "frank"),
                 "Gaussian": (GaussianCopula, "gaussian"),
                 "Student_t": (StudentCopula, "student_t")
                     }
@@ -189,8 +189,8 @@ class CopulaModel:
             best_copula_name = max(copula_models.keys(), key=lambda x: copula_models[x]["log_likelihood"])
             best_copula = copula_models[best_copula_name]
             
-            if not self.validate_copula_params(best_copula["copula"], best_copula_name.lower(), pair_name):
-                return None
+            #if not self.validate_copula_params(best_copula["copula"], best_copula_name.lower(), pair_name):
+            #    return None
 
             if not np.isfinite(best_copula["log_likelihood"]):
                 raise ValueError(f"Non-finite log-likelihood; {best_copula_name} copula fit likely failed for {pair_name}.")

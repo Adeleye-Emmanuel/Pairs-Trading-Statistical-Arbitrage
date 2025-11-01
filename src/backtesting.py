@@ -410,7 +410,7 @@ if __name__ == "__main__":
         selected_pairs=selected_pairs,
         initial_capital=100_000,
         tcost_bps=5,
-        risk_per_trade=0.05,
+        risk_per_trade=0.1,
         max_positions=5,
         lookback_volatility=90
     )
@@ -420,6 +420,6 @@ if __name__ == "__main__":
 
     # Saving results
     if len(trades_df) > 0:
-        trades_df.to_csv(os.path.join(BACKTEST_DIR, "backtest_trades[2015-2024 on 2025].csv"), index=False)
-        equity_curve.to_csv(os.path.join(BACKTEST_DIR, "backtest_equity_curve [2015-2024 on 2025].csv"), index=False)
+        trades_df.to_csv(os.path.join(BACKTEST_DIR, "backtest_trades[2015-2024 on 2025 with no archimedean].csv"), index=False)
+        equity_curve.to_csv(os.path.join(BACKTEST_DIR, "backtest_equity_curve [2015-2024 on 2025 no archimedean].csv"), index=False)
         print(f"\nResults saved to {BACKTEST_DIR}")

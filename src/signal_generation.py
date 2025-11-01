@@ -165,7 +165,7 @@ class SignalGenerator:
             if hasattr(params_obj, 'rho'):
                 rho = float(params_obj.rho[0]) if isinstance(params_obj.rho, np.ndarray) else float(params_obj.rho)
             else:
-                rho = float(copula.params[0, 1]) if hasattr(copula.params, "shape") else 0.5
+                rho = float(copula.params[0]) if hasattr(copula.params, "shape") else 0.5
             return self.calculate_conditional_probability_gaussian(u, v, rho)
         
         elif copula_type in ["Frank", "Clayton", "Gumbel"]:

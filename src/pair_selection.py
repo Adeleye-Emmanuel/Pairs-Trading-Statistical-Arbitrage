@@ -31,7 +31,7 @@ class PairSelector():
         #     self.test_start_date = pd.to_datetime(self.test_start_date)
 
         self.train_end_date = pd.to_datetime("2024-12-31")
-        #self.test_end_date = pd.to_datetime("2024-12-31")
+        # self.test_end_date = pd.to_datetime("2021-12-31")
 
         # Splitting data
         self.train_prices_df = prices_df[:self.train_end_date]
