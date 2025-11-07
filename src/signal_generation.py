@@ -1,363 +1,410 @@
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from scipy.stats import t as student_t, norm
+from statsmodels.api import OLS, add_constant
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from scipy.stats import t as student_t, norm
-from copulae.elliptical import StudentCopula
-from src.copula_model import *
-from src.pair_selection import *
+from src.copula_model import CopulaModel
 from src.config import ETFS_DIR, PROCESSED_DIR
 
-class SignalGenerator:
-
-    def __init__(self, lookback_days=90, entry_threshold=0.95, exit_threshold=0.5, 
-                 max_holding_days=32):
+class OptimizedSignalGenerator:
+    """
+    Optimized based on your debug results showing copula rarely confirms z-score
+    """
+    
+    def __init__(self, 
+                 lookback_days=60,
+                 # Primary signal: Z-score
+                 entry_z_score=2.0,
+                 exit_z_score=0.5,
+                 stop_loss_z_score=3.5,
+                 # Copula as filter (not requirement)
+                 use_copula_filter=True,
+                 copula_veto_threshold=0.5,  # Only veto if copula strongly disagrees
+                 # Position management
+                 max_holding_days=30,
+                 position_scale_by_conviction=True):
+        """
+        New approach based on debug insights:
+        1. Z-score is primary signal (works 19% of days)
+        2. Copula acts as a VETO only in extreme disagreement
+        3. Scale position size by conviction (both signals agree = larger position)
+        """
         
         self.lookback_days = lookback_days
-        self.entry_threshold = entry_threshold
-        self.exit_threshold = exit_threshold
+        self.entry_z_score = entry_z_score
+        self.exit_z_score = exit_z_score
+        self.stop_loss_z_score = stop_loss_z_score
         self.max_holding_days = max_holding_days
-
-    def fit_marginal_distributions(self, returns):
-        """Fit marginal distribution on returns data"""
-        try:
-            returns_clean = returns[np.isfinite(returns)]
-            if len(returns_clean) < 10:
-                raise ValueError("Insufficient data")
-            
-            df, loc, scale = student_t.fit(returns_clean)
-            
-            # Validate parameters
-            if not (np.isfinite(df) and np.isfinite(loc) and np.isfinite(scale) and df > 2):
-                raise ValueError("Invalid t-distribution parameters")
-            
-            def cdf(x):
-                return student_t.cdf(x, df, loc=loc, scale=scale)
-            
-            return {"cdf": cdf, "params": {"df": df, "loc": loc, "scale": scale}}
         
+        self.use_copula_filter = use_copula_filter
+        self.copula_veto_threshold = copula_veto_threshold
+        self.position_scale_by_conviction = position_scale_by_conviction
+        
+        print(f"\nOptimized Signal Generator:")
+        print(f"  Primary Signal: Z-score > {entry_z_score}")
+        print(f"  Copula Role: {'Veto if strongly contradicts' if use_copula_filter else 'Disabled'}")
+        print(f"  Position Scaling: {'By conviction' if position_scale_by_conviction else 'Fixed'}")
+    
+    def calculate_spread_zscore(self, prices, etf1, etf2, hedge_ratio, lookback):
+        """Calculate z-score of the spread"""
+        spread = prices[etf1] - hedge_ratio * prices[etf2]
+        spread_mean = spread.rolling(lookback, min_periods=20).mean()
+        spread_std = spread.rolling(lookback, min_periods=20).std()
+        z_score = (spread - spread_mean) / (spread_std + 1e-8)
+        return spread, z_score
+    
+    def calculate_copula_signal_strength(self, cond_prob, z_score):
+        """
+        Calculate how much the copula agrees/disagrees with z-score
+        Returns: -1 (strong disagree) to +1 (strong agree)
+        """
+        if z_score > 0:  # Spread is high
+            # For short signal, want copula prob to be low (ETF1 overvalued)
+            # Low prob (0.0) = agrees, High prob (1.0) = disagrees
+            agreement = 1 - 2 * cond_prob  # Maps [0,1] to [1,-1]
+        else:  # Spread is low
+            # For long signal, want copula prob to be high (ETF1 undervalued)
+            # High prob (1.0) = agrees, Low prob (0.0) = disagrees
+            agreement = 2 * cond_prob - 1  # Maps [0,1] to [-1,1]
+        
+        return agreement
+    
+    def transform_to_uniform(self, data, lookback_data):
+        """Transform to uniform using ECDF"""
+        if not np.isfinite(data):
+            return 0.5
+        
+        clean_lookback = lookback_data[np.isfinite(lookback_data)]
+        if len(clean_lookback) < 20:
+            return 0.5
+        
+        n = len(clean_lookback)
+        rank = np.sum(clean_lookback <= data)
+        uniform = (rank + 0.5) / (n + 1)
+        return np.clip(uniform, 0.001, 0.999)
+    
+    def calculate_conditional_prob(self, u, v, copula_model):
+        """Calculate conditional probability - simplified"""
+        try:
+            copula_type = copula_model["copula_type"]
+            copula = copula_model["copula"]
+            
+            if copula_type == "student":
+                params = copula.params
+                df = float(params.df)
+                rho = float(params.rho[0]) if hasattr(params.rho, '__len__') else float(params.rho)
+                
+                if not (0 < u < 1 and 0 < v < 1) or df <= 2 or abs(rho) >= 1:
+                    return 0.5
+                
+                t1 = student_t.ppf(u, df)
+                t2 = student_t.ppf(v, df)
+                
+                var_scale = (df + t2**2) / (df + 1)
+                mu_cond = rho * t2
+                sigma_cond = np.sqrt((1 - rho**2) * var_scale)
+                
+                if sigma_cond <= 0:
+                    return 0.5
+                
+                return student_t.cdf(t1, df=df+1, loc=mu_cond, scale=sigma_cond)
+            
+            elif copula_type == "gaussian":
+                params = copula.params
+                rho = float(params[0,1]) if params.ndim > 1 else float(params[0])
+                
+                if not (0 < u < 1 and 0 < v < 1) or abs(rho) >= 1:
+                    return 0.5
+                
+                z1 = norm.ppf(u)
+                z2 = norm.ppf(v)
+                
+                mu_cond = rho * z2
+                sigma_cond = np.sqrt(1 - rho**2)
+                
+                return norm.cdf(z1, loc=mu_cond, scale=sigma_cond)
+            
+            # For other copulas, return neutral
+            return 0.5
+            
         except:
-            # Fallback to normal
-            mu, std = np.mean(returns_clean), np.std(returns_clean)
-            if std <= 0:
-                std = 1e-6
-            
-            def cdf(x):
-                return norm.cdf(x, loc=mu, scale=std)
-            
-            return {"cdf": cdf, "params": {"mu": mu, "std": std}}
+            return 0.5
     
-    def calculate_conditional_probability_studentt(self, u, v, rho, df):
-        """
-        Calculate P(U1 <= u | U2 = v) for t-copula
-        Returns NaN if calculation fails
-        """
-        try:
-
-            if not (np.isfinite(u) and np.isfinite(v) and np.isfinite(rho) and np.isfinite(df)):
-                return np.nan
-            
-            if df <= 2 or abs(rho) >= 1:
-                return np.nan
-            
-            t1 = student_t.ppf(u, df)
-            t2 = student_t.ppf(v, df)                      
-            
-            # Check for infinite quantiles
-            if not (np.isfinite(t1) and np.isfinite(t2)):
-                return np.nan
-            
-            # Conditional distribution T1|T2 ~ t(df+1, mu_cond, sigma_cond)
-            scaling = np.sqrt((df + 1) / (df + t2**2))
-            mu_cond = rho * t2 * scaling
-            var_cond = ((df + t2**2) / (df + 1)) * (1 - rho**2)
-            sigma_cond = np.sqrt(var_cond)
-            
-            if not np.isfinite(sigma_cond) or sigma_cond <= 0:
-                return np.nan
-            
-            # Calculate conditional CDF
-            cond_prob = student_t.cdf(t1, df=df+1, loc=mu_cond, scale=sigma_cond)
-            
-            if not np.isfinite(cond_prob):
-                 return np.nan
-             
-            return cond_prob
+    def generate_signal(self, prices_df, pair_data, start_date=None, end_date=None):
+        """Generate trading signals with copula as filter/scaler"""
         
-        except Exception as e:
-            return np.nan
-    
-    def calculate_conditional_probability_gaussian(self, u, v, rho):
-        try:
-            if not (np.isfinite(u) and np.isfinite(v) and np.isfinite(rho)):
-                return np.nan
-            if abs(rho)>=1:
-                return np.nan
-            
-            z1, z2 = norm.ppf(u), norm.ppf(v)
-            if not (np.isfinite(z1) and np.isfinite(z1)):
-                return np.nan
-            # Conditional distribution: Z1|Z2 ~ N(rho*z2, 1-rho^2)
-            mu_cond = rho * z2
-            sigma_cond = np.sqrt(1-rho**2)
-
-            if not np.isfinite(sigma_cond) or sigma_cond<=0:
-                return np.nan
-            cond_prob = norm.cdf(z1, loc=mu_cond, scale=sigma_cond)
-
-            if not np.isfinite(cond_prob):
-                return np.nan
-            
-            return cond_prob
-        except Exception as e:
-            return np.nan
-        
-    def calulcate_conditional_probability_archimedean(self, u, v, copula):
-        """
-        Calculate P(U1 <= u | U2 = v) for Archimedean copulas (Frank, Clayton, Gumbel)
-        Using numerical derivative: P(U1 <= u | U2 = v) = ∂C(u,v)/∂v
-        """
-        try:
-            if not (np.isfinite(u) and np.isfinite(v)):
-                return np.nan
-            
-            # Small pertubation for numerical derivatives
-            epsilon = 1e-6
-            v_plus = min(v+epsilon, 1-1e-10)
-            v_minus = max(v-epsilon, 1e-10)
-
-            uv = np.array([[u, v_minus], [u, v_plus]])
-
-            try:
-                c_minus = copula.cdf(uv[0:1, :])[0]
-                c_plus = copula.cdf(uv[1:2, :])[0]
-            except:
-                c_minus = copula.cdf([u, v_minus])
-                c_plus = copula.cdf([u, v_plus])
-
-            cond_prob = (c_plus - c_minus) / (2*epsilon)
-
-            cond_prob = np.clip(cond_prob, 0, 1) # Clipping to valid probability range
-
-            if not np.isfinite(cond_prob):
-                return np.nan
-            
-            return cond_prob
-        
-        except Exception as e:
-            return np.nan
-    
-    def calculate_conditional_probabilities(self, u, v, copula_model):
-
-        copula = copula_model["copula"]
-        copula_type = copula_model["copula_type"]
-
-        if copula_type == "Student_t":
-            params_obj = copula.params
-            df = float(params_obj.df)
-            rho = float(params_obj.rho[0]) if isinstance(params_obj.rho, np.ndarray) else float(params_obj.rho)
-            return self.calculate_conditional_probability_studentt(u, v, rho, df)
-        
-        elif copula_type == 'Gaussian':
-            params_obj = copula.params
-            if hasattr(params_obj, 'rho'):
-                rho = float(params_obj.rho[0]) if isinstance(params_obj.rho, np.ndarray) else float(params_obj.rho)
-            else:
-                rho = float(copula.params[0]) if hasattr(copula.params, "shape") else 0.5
-            return self.calculate_conditional_probability_gaussian(u, v, rho)
-        
-        elif copula_type in ["Frank", "Clayton", "Gumbel"]:
-            return self.calulcate_conditional_probability_archimedean(u,v, copula)
-        
-        else:
-            return np.nan # Unknown copula type    
-
-    def generate_signal(self, prices_df, pair_data, 
-                        start_date=None, end_date=None):
-        
-        pair_name = f"{pair_data['ETF1']}_{pair_data['ETF2']}"
-        copula_type = pair_data.get("copula_type", "Unkown")
-        print(f"Generating signals for {pair_name} (using {copula_type})...")
-        
-        hedge_ratio = pair_data.get("hedge_ratio", 1)
-        
-        # Get static copula model from pair selection
-        model = pair_data.get("copula_model")
-        if not model:
-            print(f"  ERROR: No copula model found for {pair_name}")
-            return None
-
-        copula = model["copula"]
+        pair_name = f"{pair_data['etf1']}_{pair_data['etf2']}"
+        print(f"\nGenerating optimized signals for {pair_name}...")
         
         if start_date:
             prices_df = prices_df[start_date:]
         if end_date:
             prices_df = prices_df[:end_date]
         
-        dates = prices_df.index        
-        results = pd.DataFrame(index=dates,
-                               columns=[
-                                   "position", 
-                                   "entry_signal", "exit_signal", 
-                                   "cond_prob_1g2",
-                                   "spread", "entry_price", "entry_date"
-                               ])
+        etf1, etf2 = pair_data["etf1"], pair_data["etf2"]
+        copula_model = pair_data.get("copula_model")
+        
+        # Calculate spread and z-scores
+        spread, z_score = self.calculate_spread_zscore(
+            prices_df, etf1, etf2, pair_data["hedge_ratio"], self.lookback_days
+        )
+        
+        # Initialize results
+        dates = prices_df.index
+        results = pd.DataFrame(index=dates, columns=[
+            "position", "position_size", "entry_signal", "exit_signal",
+            "spread", "z_score", "cond_prob", "copula_agreement",
+            "entry_price", "entry_date"
+        ])
         
         position = 0
-        entry_idx = None
+        position_size = 1.0  # Default full position
+        entry_price = None
         entry_date = None
+        entry_idx = None
         
-        etf1, etf2 = pair_data["ETF1"], pair_data["ETF2"]
+        # Counters
+        signals_generated = 0
+        signals_vetoed = 0
+        signals_scaled_up = 0
+        signals_scaled_down = 0
         
-        successful_calcs = 0
-        
+        # Generate signals
         for i in range(self.lookback_days, len(prices_df)):
             current_date = dates[i]
+            current_z = z_score.iloc[i]
             
-            # Get lookback window
-            lookback_prices = prices_df.iloc[i-self.lookback_days:i]
-            current_prices = prices_df.iloc[i]
-            
-            # Align series
-            series_1 = lookback_prices[etf1].dropna()
-            series_2 = lookback_prices[etf2].dropna()
-            common_index = series_1.index.intersection(series_2.index)
-            
-            if len(common_index) < 30:
+            if not np.isfinite(current_z):
                 continue
             
-            lookback_series1 = series_1.loc[common_index]
-            lookback_series2 = series_2.loc[common_index]
+            results.loc[current_date, "spread"] = spread.iloc[i]
+            results.loc[current_date, "z_score"] = current_z
             
-            # Calculate LOG RETURNS on rolling window
-            lookback_returns_1 = np.diff(np.log(lookback_series1.values))
-            lookback_returns_2 = np.diff(np.log(lookback_series2.values))
+            # Calculate copula probability if using filter
+            cond_prob = 0.5
+            copula_agreement = 0.0
             
-            lookback_returns_1 = lookback_returns_1[np.isfinite(lookback_returns_1)]
-            lookback_returns_2 = lookback_returns_2[np.isfinite(lookback_returns_2)]
-            
-            if len(lookback_returns_1) < 10 or len(lookback_returns_2) < 10:
-                continue
-            
-            # Calculate current log return
-            if not np.isfinite(current_prices[etf1]) or not np.isfinite(current_prices[etf2]):
-                continue
+            if self.use_copula_filter and copula_model:
+                # Get returns for transformation
+                lookback_prices1 = prices_df[etf1].iloc[max(0, i-self.lookback_days):i]
+                lookback_prices2 = prices_df[etf2].iloc[max(0, i-self.lookback_days):i]
                 
-            current_log_ret_1 = np.log(current_prices[etf1] / lookback_series1.iloc[-1])
-            current_log_ret_2 = np.log(current_prices[etf2] / lookback_series2.iloc[-1])
+                if len(lookback_prices1) > 20:
+                    lookback_returns1 = np.log(lookback_prices1 / lookback_prices1.shift(1)).dropna().values
+                    lookback_returns2 = np.log(lookback_prices2 / lookback_prices2.shift(1)).dropna().values
+                    
+                    if len(lookback_returns1) > 10 and len(lookback_returns2) > 10:
+                        current_ret1 = np.log(prices_df[etf1].iloc[i] / prices_df[etf1].iloc[i-1])
+                        current_ret2 = np.log(prices_df[etf2].iloc[i] / prices_df[etf2].iloc[i-1])
+                        
+                        u = self.transform_to_uniform(current_ret1, lookback_returns1)
+                        v = self.transform_to_uniform(current_ret2, lookback_returns2)
+                        
+                        cond_prob = self.calculate_conditional_prob(u, v, copula_model)
+                        copula_agreement = self.calculate_copula_signal_strength(cond_prob, current_z)
+                        
+                        results.loc[current_date, "cond_prob"] = cond_prob
+                        results.loc[current_date, "copula_agreement"] = copula_agreement
             
-            if not (np.isfinite(current_log_ret_1) and np.isfinite(current_log_ret_2)):
-                continue
-            
-            # Fit marginals on rolling window (adapts to changing volatility)
-            marginal_1 = self.fit_marginal_distributions(lookback_returns_1)
-            marginal_2 = self.fit_marginal_distributions(lookback_returns_2)
-            
-            # Transform current returns to uniform using fitted marginals
-            u_current = marginal_1["cdf"](current_log_ret_1)
-            v_current = marginal_2["cdf"](current_log_ret_2)
-            
-            u_current = np.clip(u_current, 1e-6, 1-1e-6)
-            v_current = np.clip(v_current, 1e-6, 1-1e-6)
-            
-            # Calculate conditional probability using STATIC copula parameters
-            cond_prob_1g2 = self.calculate_conditional_probabilities(u_current, v_current, model)
-            
-            if not np.isfinite(cond_prob_1g2):
-                continue
-            
-            successful_calcs += 1
-            
-            results.loc[current_date, "cond_prob_1g2"] = cond_prob_1g2
-            results.loc[current_date, "spread"] = current_prices[etf1] - hedge_ratio * current_prices[etf2]
-            
-            # Entry logic (CORRECTED)
-            # High cond_prob (>0.95) = ETF1 likely in lower tail = undervalued = LONG spread
-            # Low cond_prob (<0.05) = ETF1 likely in upper tail = overvalued = SHORT spread
+            # ENTRY LOGIC
             if position == 0:
-                # ETF1 undervalued relative to ETF2 -> Long spread (buy ETF1, sell ETF2)
-                if cond_prob_1g2 > self.entry_threshold:
-                    position = 1
-                    results.loc[current_date, "entry_signal"] = True
-                    results.loc[current_date, "entry_price"] = results.loc[current_date, "spread"]
-                    results.loc[current_date, "entry_date"] = current_date
-                    entry_idx = i
-                    entry_date = current_date
+                base_signal = False
+                signal_direction = 0
                 
-                # ETF1 overvalued relative to ETF2 -> Short spread (sell ETF1, buy ETF2)
-                elif cond_prob_1g2 < (1 - self.entry_threshold):
-                    position = -1
+                # Primary signal: Z-score
+                if abs(current_z) > self.entry_z_score:
+                    base_signal = True
+                    signal_direction = -1 if current_z > 0 else 1  # Short if high, long if low
+                    signals_generated += 1
+                
+                if base_signal:
+                    # Check copula veto (only if strongly disagrees)
+                    if self.use_copula_filter and copula_agreement < -self.copula_veto_threshold:
+                        # Copula strongly disagrees, veto the signal
+                        signals_vetoed += 1
+                        base_signal = False
+                    else:
+                        # Determine position size based on conviction
+                        if self.position_scale_by_conviction:
+                            if copula_agreement > 0.5:
+                                position_size = 1.5  # Scale up if strong agreement
+                                signals_scaled_up += 1
+                            elif copula_agreement < -0.25:
+                                position_size = 0.5  # Scale down if mild disagreement
+                                signals_scaled_down += 1
+                            else:
+                                position_size = 1.0  # Normal size
+                        else:
+                            position_size = 1.0
+                
+                # Execute entry
+                if base_signal:
+                    position = signal_direction
+                    results.loc[current_date, "position_size"] = position_size
                     results.loc[current_date, "entry_signal"] = True
-                    results.loc[current_date, "entry_price"] = results.loc[current_date, "spread"]
-                    results.loc[current_date, "entry_date"] = current_date
-                    entry_idx = i
+                    entry_price = spread.iloc[i]
                     entry_date = current_date
+                    entry_idx = i
             
-            # Exit logic
+            # EXIT LOGIC (keep simple, z-score based)
             elif position != 0:
                 exit_signal = False
                 
-                # Mean reversion: exit when conditional prob returns toward 0.5
-                if abs(cond_prob_1g2 - 0.5) < abs(self.exit_threshold - 0.5):
+                # Mean reversion exit
+                if position == 1 and current_z > -self.exit_z_score:
+                    exit_signal = True
+                elif position == -1 and current_z < self.exit_z_score:
                     exit_signal = True
                 
-                # Maximum holding period
-                elif entry_idx and (i - entry_idx) >= self.max_holding_days:
+                # Stop loss
+                if abs(current_z) > self.stop_loss_z_score:
+                    exit_signal = True
+                
+                # Time stop
+                if entry_idx and (i - entry_idx) >= self.max_holding_days:
                     exit_signal = True
                 
                 if exit_signal:
                     results.loc[current_date, "exit_signal"] = True
                     results.loc[current_date, "entry_date"] = entry_date
                     position = 0
-                    entry_idx = None
+                    position_size = 1.0
+                    entry_price = None
                     entry_date = None
+                    entry_idx = None
             
             results.loc[current_date, "position"] = position
         
         # Clean up results
-        results = results.dropna(subset=["cond_prob_1g2"])
+        results = results.dropna(subset=["z_score"])
         results["entry_signal"] = results["entry_signal"].fillna(False)
         results["exit_signal"] = results["exit_signal"].fillna(False)
+        results["position_size"] = results["position_size"].fillna(1.0)
         
+        # Report statistics
         num_entries = results["entry_signal"].sum()
-        print(f"  Successful calculations: {successful_calcs}")
-        print(f"  Generated {num_entries} entry signals")
+        num_exits = results["exit_signal"].sum()
         
-        if num_entries == 0:
-            if successful_calcs > 0:
-                print(f"  Cond prob range: [{results['cond_prob_1g2'].min():.3f}, {results['cond_prob_1g2'].max():.3f}]")
-                print(f"  Entry threshold: {self.entry_threshold} (might be too extreme)")
-            else:
-                print(f"  ERROR: No successful conditional probability calculations")
+        print(f"  Signals: {num_entries} entries, {num_exits} exits")
+        
+        if self.use_copula_filter:
+            print(f"  Copula impact:")
+            print(f"    - Signals vetoed: {signals_vetoed}/{signals_generated} ({signals_vetoed/max(signals_generated,1)*100:.1f}%)")
+            if self.position_scale_by_conviction:
+                print(f"    - Positions scaled up: {signals_scaled_up}")
+                print(f"    - Positions scaled down: {signals_scaled_down}")
+        
+        # Show copula agreement distribution
+        if "copula_agreement" in results.columns and num_entries > 0:
+            entry_agreements = results[results["entry_signal"] == True]["copula_agreement"].dropna()
+            if len(entry_agreements) > 0:
+                print(f"    - Avg agreement on entries: {entry_agreements.mean():.2f}")
         
         return results
     
     def generate_batch_signals(self, prices_df, selected_pairs, start_date=None, end_date=None):
+        """Generate signals for all pairs"""
         all_signals = {}
         
+        print(f"\n{'='*60}")
+        print(f"OPTIMIZED SIGNAL GENERATION")
+        print(f"{'='*60}")
+        
+        total_entries = 0
+        total_vetoed = 0
+        
         for pair_data in selected_pairs:
-            signals = self.generate_signal(prices_df, pair_data, start_date=start_date, end_date=end_date)
-            pair_name = f"{pair_data['ETF1']}_{pair_data['ETF2']}"
+            signals = self.generate_signal(prices_df, pair_data, start_date, end_date)
+            pair_name = f"{pair_data['etf1']}_{pair_data['etf2']}"
             all_signals[pair_name] = signals
+            
+            if len(signals) > 0:
+                entries = signals[signals["entry_signal"]].shape[0]
+                total_entries += entries
+        
+        print(f"\n{'='*60}")
+        print(f"SUMMARY:")
+        print(f"  Total entries: {total_entries} across {len(selected_pairs)} pairs")
+        print(f"  Average per pair: {total_entries/max(len(selected_pairs),1):.1f}")
+        print(f"{'='*60}")
         
         return all_signals
+
+
+def test_optimized_strategy():
+    """Test the optimized strategy"""
+    from src.pair_selection import PairSelector
+    from src.config import PROCESSED_DIR
+    from src.backtesting import ImprovedBacktester
     
-if __name__ == "__main__":
+    # Load data
     prices = pd.read_csv(os.path.join(PROCESSED_DIR, "cleaned_prices.csv"), index_col=0, parse_dates=True)
     returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
-    selector = PairSelector(prices, returns)
+    
+    # Run pair selection
+    selector = PairSelector(
+        prices, returns,
+        train_end_date=pd.to_datetime("2023-12-31"),
+        test_end_date=pd.to_datetime("2024-12-31"),
+        top_n=15,
+        coint_pvalue=0.05,
+        min_half_life=5,
+        max_half_life=90
+    )
+    
     selected_pairs = selector.run_selection()
-    
     test_prices, test_returns = selector.get_test_data()
-    signal_gen = SignalGenerator()
-    all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
     
-    for pair_name, signals in all_signals.items():
-        if signals is not None:
-            print(f"\n{pair_name}:")
-            print(f"  Total signals: {signals['entry_signal'].sum()}")
-            if len(signals) > 0:
-                print(f"  Avg conditional prob: {signals['cond_prob_1g2'].mean():.3f}")
-                print(f"  Cond prob range: [{signals['cond_prob_1g2'].min():.3f}, {signals['cond_prob_1g2'].max():.3f}]")
+    # Test configurations
+    configs = [
+        {"name": "Pure Z-Score", "use_copula": False, "scale": False},
+        {"name": "Z + Copula Veto", "use_copula": True, "scale": False},
+        {"name": "Z + Copula Scaling", "use_copula": True, "scale": True},
+    ]
+    
+    results = {}
+    
+    for config in configs:
+        print(f"\n\n{'='*80}")
+        print(f"TESTING: {config['name']}")
+        print(f"{'='*80}")
+        
+        # Generate signals
+        signal_gen = OptimizedSignalGenerator(
+            entry_z_score=1.5,
+            use_copula_filter=config["use_copula"],
+            position_scale_by_conviction=config["scale"],
+            copula_veto_threshold=0.7  # Only veto if copula strongly disagrees
+        )
+        
+        all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
+        
+        # Run backtest
+        backtester = ImprovedBacktester(
+            initial_capital=100_000,
+            tcost_bps=5,
+            slippage_bps=3
+        )
+        
+        portfolio, metrics = backtester.run_backtest(test_prices, all_signals)
+        results[config["name"]] = metrics
+    
+    # Display comparison
+    print(f"\n\n{'='*80}")
+    print("STRATEGY COMPARISON")
+    print(f"{'='*80}")
+    
+    for strategy, metrics in results.items():
+        print(f"\n{strategy}:")
+        print(f"  Sharpe Ratio: {metrics.get('Sharpe Ratio', 'N/A')}")
+        print(f"  Total Return: {metrics.get('Total Return', 'N/A')}")
+        print(f"  Max Drawdown: {metrics.get('Maximum Drawdown', 'N/A')}")
+        print(f"  Win Rate: {metrics.get('Win Rate (Daily)', 'N/A')}")
+    
+    return results
+
+
+if __name__ == "__main__":
+    results = test_optimized_strategy()

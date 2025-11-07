@@ -83,7 +83,6 @@ if __name__ == "__main__":
         "HYG", "TIP",
         "DBA", "WOOD",
         "VNQ", "REM"
-
     ]
 
     parser.add_argument("--etfs", nargs='+', default=etf_tickers, help="List of ETF ticker symbols.")

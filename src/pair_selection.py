@@ -1,258 +1,257 @@
 import os
 import numpy as np 
 import pandas as pd
+from scipy.stats import spearmanr
 from statsmodels.tsa.stattools import coint
 from statsmodels.api import OLS, add_constant
 from itertools import combinations
-import sys, os
+import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from sklearn.preprocessing import MinMaxScaler
 
 from src.config import ETFS_DIR, PROCESSED_DIR
 from src.copula_model import CopulaModel
 
 class PairSelector():
 
-    def __init__(self, prices_df, returns_df, train_end_date=None, test_start_date=None):
-        self.full_prices_df = prices_df
-        self.full_returns_df = returns_df
-
-        # # Default split: 75% train, 25% test
-        # if train_end_date is None:
-        #     split_idx = int(len(prices_df)*0.75)
-        #     self.train_end_date = prices_df.index[split_idx]
-        # else:
-        #     self.train_end_date = pd.to_datetime(train_end_date)
-
-        # if test_start_date is None:
-        #     self.test_start_date = self.train_end_date
-        # else:
-        #     self.test_start_date = pd.to_datetime(self.test_start_date)
-
-        self.train_end_date = pd.to_datetime("2024-12-31")
-        # self.test_end_date = pd.to_datetime("2021-12-31")
-
-        # Splitting data
-        self.train_prices_df = prices_df[:self.train_end_date]
-        self.train_returns_df = prices_df[:self.train_end_date]
-        self.test_prices_df = prices_df[self.train_end_date:]
-        self.test_returns_df = prices_df[self.train_end_date:]
-
-        print(f"\nTrain/Test Split:")
-        print(f"  Training period: {self.train_prices_df.index[0]} to {self.train_prices_df.index[-1]}")
-        print(f"  Training days: {len(self.train_prices_df)}")
-        print(f"  Testing period: {self.test_prices_df.index[0]} to {self.test_prices_df.index[-1]}")
-        print(f"  Testing days: {len(self.test_prices_df)}")
-
-        self.copula_model = CopulaModel()
-        self.selected_pairs = []
-
-    def compute_correlations(self, returns_df):
-        return returns_df.corr()
-
-    # This is applied as a first stage filter on the asset universe, later on it could be replaced with a fundamentals filtration function
-    # that considers more fundamental metrics as a baseline logic for initial selection before cointegration test
-    def filter_top_percentile(self, corr_matrix, percentile, min_pairs=20, abs_min_corr=0.7):
-        # Get pairs of ETFs with correlation above the specified percentile for all tickers
-        vals = corr_matrix.values[np.triu_indices_from(corr_matrix.values, k=1)]
-        finite_vals = vals[np.isfinite(vals)]
-        if len(finite_vals) == 0:
-            raise ValueError("No finite correlation values found.")
-        vals = finite_vals
-        pct_thr = np.nanpercentile(vals, percentile)
-        threshold = max(pct_thr, abs_min_corr)
-        print(f"Correlation threshold set at: {threshold:.4f} (Percentile: {percentile}th, Abs Min: {abs_min_corr})")
-
-        high_corr_pairs = [(corr_matrix.index[i], corr_matrix.columns[j], corr_matrix.values[i, j]) 
-                        for i in range(corr_matrix.shape[0]) 
-                        for j in range(i+1, corr_matrix.shape[1]) 
-                        if corr_matrix.values[i, j] >= threshold]
+    def __init__(self, prices_df, returns_df, train_end_date, test_end_date, 
+                 top_n=10, min_correlation=0.6, max_correlation=0.95,
+                 coint_pvalue=0.05, min_half_life=5, max_half_life=60):
+        """
+        Enhanced pair selector with cointegration and half-life filters
         
-        # fallback loop lowering percentile
-        while len(high_corr_pairs) <= min_pairs and threshold > abs_min_corr:
-            threshold -= 0.05
-            high_corr_pairs = [(corr_matrix.index[i], corr_matrix.columns[j], corr_matrix.values[i, j]) 
-                            for i in range(corr_matrix.shape[0]) 
-                            for j in range(i+1, corr_matrix.shape[1]) 
-                            if corr_matrix.values[i, j] >= threshold]
-            print(f"Lowered threshold to {threshold:.4f}, found {len(high_corr_pairs)} pairs.")
-            pairs_df = pd.DataFrame(high_corr_pairs, columns=['ETF1', 'ETF2', 'Correlation'])
-        
-            if len(high_corr_pairs) >= min_pairs:
-                break
-        
-        pairs_df = pd.DataFrame(high_corr_pairs, columns=['ETF1', 'ETF2', 'Correlation'])
-        pairs_df = pairs_df.sort_values(by='Correlation', ascending=False).reset_index(drop=True)
-        print(f"  Selected {len(pairs_df)} pairs with correlation >= {threshold:.4f}")
-        return pairs_df
+        Args:
+            coint_pvalue: Maximum p-value for cointegration test (0.01 = 99% confidence)
+            min_half_life: Minimum acceptable half-life in days
+            max_half_life: Maximum acceptable half-life in days
+        """
+        self.prices = prices_df
+        self.returns = returns_df
+        self.top_n = top_n
+        self.min_correlation = min_correlation
+        self.max_correlation = max_correlation
+        self.coint_pvalue = coint_pvalue
+        self.min_half_life = min_half_life
+        self.max_half_life = max_half_life
+        self.train_end_date = train_end_date
+        self.test_end_date = test_end_date
+        self.copula_fitter = CopulaModel()
 
-    def perform_cointegration_test(self, pairs_df, significance_level=0.01):
-        
-        print(f"\nCointegration testing (p-value < {significance_level}):")
-
-        coint_results = []
-        for _, row in pairs_df.iterrows():
-            etf1, etf2 = row["ETF1"], row["ETF2"]
-            series1, series2 = self.train_prices_df[etf1].dropna(), self.train_prices_df[etf2].dropna()
-            common_index = series1.index.intersection(series2.index)
-            series1, series2 = series1.loc[common_index], series2.loc[common_index]
-            score, pvalue, _ = coint(series1, series2)
-
-            if pvalue < significance_level:
-                X = add_constant(series2)
-                hr_model = OLS(series1, X).fit()
-                hedge_ratio = hr_model.params.iloc[1]
-
-                spread = series1 - hedge_ratio * series2    
-
-                try:
-                    spread_lag = spread.shift(1).dropna()
-                    spread_ret = spread.diff().dropna()
-                    common_idx = spread_lag.index.intersection(spread_ret.index)
-                    if len(common_idx) < 20:
-                        return None
-                    
-                    spread_lag_aligned = spread_lag.loc[common_idx]
-                    
-                    # AR(1) regression
-                    X = add_constant(spread_lag_aligned, prepend=True)
-                    spread_ret_aligned = spread_ret.loc[common_idx]
-                    spread_model = OLS(spread_ret_aligned, X).fit()
-                    beta = spread_model.params.iloc[1]
-                    if beta < 0 and beta > -1:
-                        half_life = -np.log(2) / beta
-
-                except Exception as e:
-                    print(f"half-life calculation failed for {etf1}-{etf2}: {e}")
-                    half_life = float("inf")
-
-                coint_results.append((etf1, etf2, row["Correlation"], pvalue, half_life, hedge_ratio))
-        coint_df = pd.DataFrame(coint_results, columns=['ETF1', 'ETF2', 'Correlation', 'P-Value', 'Half_life', 'Hedge_ratio'])
-        return coint_df.sort_values(by='P-Value').reset_index(drop=True)
-
-    def score_pair(self, coint_result, returns_df):
-        
-        returns_1 = returns_df[coint_result["ETF1"]].dropna().values
-        returns_2 = returns_df[coint_result["ETF2"]].dropna().values
-        
-        pair_name = f"{coint_result["ETF1"]}_{coint_result["ETF2"]}"
-        copula_model = self.copula_model.fit_copula(returns_1, returns_2, pair_name)
-
-        if not copula_model:
-            return None
-        
-        if copula_model["lower_tail_dependence"]>0.5:
-            return None
-        
-        coint_score = np.clip(1- coint_result["P-Value"]/0.01, 0, 1)
-        optimal_hl = 60
-        hl_score = np.exp(-abs(coint_result["Half_life"] - optimal_hl)/optimal_hl)
-        n_obs = len(returns_1)
-        ll_per_obs = copula_model["log_likelihood"]/n_obs
-        ll_score = np.clip(ll_per_obs, 0, 1) # rough normalisation
-
-        # score_vector = {
-        #     'mean_reversion_speed': 1 / (1 + coint_result['Half_life']), 
-        #     'coint_strength': -np.log(coint_result['P-Value']),  
-        #     'copula_fit': copula_model['log_likelihood'],  
-        #     'tail_safety': 1 - copula_model['lower_tail_dependence']  
-        # }
-        composite_score = (0.5 * coint_score + 0.3 * hl_score + 0.2 * ll_score)
-
-        pair_score = {
-            **coint_result,
-            "composite_score": composite_score,
-            "coint_score": coint_score,
-            "half_life_score": hl_score,
-            "ll_score": ll_score,
-            'copula_type': copula_model['copula_type'],
-            'tail_dependence': copula_model['lower_tail_dependence'],
-            'copula_model': copula_model
-        }
-
-        return pair_score
-    
-    def select_pareto_frontier(self, qualified_pairs):
-
-        metrics = np.array([
-            [p["mean_reversion_speed"], p["coint_strength"], p["copula_fit"], p["tail_safety"]]
-            for p in qualified_pairs
-        ])
-
-        metrics_norm = (metrics - metrics.min(axis=0)) / (metrics.max(axis=0) - metrics.min(axis=0))
-
-        # find pareto mask
-        pareto_mask = np.ones(len(metrics_norm), dtype=bool)
-
-        for i in range(len(metrics_norm)):
-            for j in range(len(metrics_norm)):
-                if i!=j and np.all(metrics_norm[j] >= metrics_norm[i]) and np.any(metrics_norm[j] > metrics_norm[i]):
-                    pareto_mask[i] = False
-                    break
-        pareto_pairs = [qualified_pairs[i] for i in range(len(qualified_pairs)) if pareto_mask[i]]
-        return pareto_pairs
-    
-    def get_copula_model(self):
-        return self.copula_model
-
-    def run_selection(self, max_pairs=15):
-        
-        print("\n" + "="*60)
-        print("PAIR SELECTION (TRAINING PHASE)")
-        print("="*60)
-
-        corr_matrix = self.compute_correlations(self.train_returns_df)
-        candidate_pairs = self.filter_top_percentile(corr_matrix=corr_matrix, percentile=95)
-        coint_result = self.perform_cointegration_test(candidate_pairs, significance_level=0.01)
-
-        print(f"Found {len(coint_result)} cointegrated pairs")
-        
-        print("\n Copula Fitting and Scoring..")
-        qualified_pairs = []
-        for _, coint_row in coint_result.iterrows():
-            scored_pair = self.score_pair(coint_row.to_dict(), self.train_returns_df)
-            if scored_pair:
-                qualified_pairs.append(scored_pair)
-  
-        if not qualified_pairs:
-            print("No qualified pairs found!") 
-            return []
-        
-        print(f" {len(qualified_pairs)} pairs successfully fitted")     
-
-        # pareto_pairs = self.select_pareto_frontier(qualified_pairs)
-        # print(f"Found {len(pareto_pairs)} Pareto Optimal Pairs")
-        
-        # # will possibly create a max pair final object
-
-        # final_df = pd.DataFrame(pareto_pairs)
-        qualified_pairs.sort(key=lambda x: x["composite_score"], reverse=True)
-        selected_pairs = qualified_pairs[:max_pairs]
-
-        print("\n" + "="*60)
-        print(f"SELECTED {len(selected_pairs)} PAIRS (Ranked by Score)")
-        print("="*60)
-
-        for i, pair in enumerate(selected_pairs, 1):
-            print(f"\n{i}. {pair['ETF1']}_{pair['ETF2']}")
-            print(f"   Composite Score: {pair['composite_score']:.3f}")
-            print(f"   Cointegration: p={pair['P-Value']:.4f}, half-life={pair['Half_life']:.1f} days")
-            print(f"   Copula: {pair['copula_type']}, tail_dep={pair['tail_dependence']:.3f}")
-            print(f"   Correlation: {pair['Correlation']:.3f}, Hedge Ratio: {pair['Hedge_ratio']:.3f}")
-      
-        self.selected_pairs = selected_pairs
-
-        return selected_pairs
+    def get_train_data(self):
+        return self.prices.loc[:self.train_end_date], self.returns.loc[:self.train_end_date]
     
     def get_test_data(self):
-        # Return test data for signal generation
-        return self.test_prices_df, self.test_returns_df
+        return self.prices.loc[self.train_end_date:self.test_end_date], self.returns.loc[self.train_end_date:self.test_end_date]
+    
+    def calculate_half_life(self, spread):
+        """
+        Calculate mean reversion half-life using Ornstein-Uhlenbeck process
+        """
+        spread_lag = pd.Series(spread).shift(1).values[1:]
+        spread_diff = pd.Series(spread).diff().values[1:]
+        
+        # Remove NaN values
+        valid_idx = ~(np.isnan(spread_lag) | np.isnan(spread_diff))
+        if valid_idx.sum() < 20:
+            return np.nan
+        
+        spread_lag = spread_lag[valid_idx]
+        spread_diff = spread_diff[valid_idx]
+        
+        # OLS: spread_diff = theta * (mu - spread_lag) + epsilon
+        # Simplified: spread_diff = -lambda * spread_lag + const
+        X = add_constant(spread_lag)
+        model = OLS(spread_diff, X).fit()
+        
+        lambda_param = -model.params[1]
+        
+        if lambda_param <= 0:
+            return np.nan  # No mean reversion
+        
+        half_life = np.log(2) / lambda_param
+        return half_life
+    
+    def calculate_pair_metrics(self, etf1, etf2, train_prices, train_returns):
+        """
+        Calculate comprehensive pair metrics including cointegration and half-life
+        """
+        prices1 = train_prices[etf1].dropna()
+        prices2 = train_prices[etf2].dropna()
+        returns1 = train_returns[etf1].dropna()
+        returns2 = train_returns[etf2].dropna()
+        
+        common_index = prices1.index.intersection(prices2.index).intersection(
+            returns1.index).intersection(returns2.index)
+        
+        if len(common_index) < 252:  # Require at least 1 year of data
+            return None
+        
+        prices1 = prices1.loc[common_index]
+        prices2 = prices2.loc[common_index]
+        returns1 = returns1.loc[common_index]
+        returns2 = returns2.loc[common_index]
+
+        # 1. Correlation check (pre-filter)
+        corr, _ = spearmanr(returns1, returns2)
+        if abs(corr) < self.min_correlation or abs(corr) > self.max_correlation:
+            return None
+        
+        # 2. Cointegration test (CRITICAL)
+        coint_stat, pvalue, crit_values = coint(prices1, prices2)
+        if pvalue > self.coint_pvalue:
+            return None  # Not cointegrated
+        
+        # 3. Calculate hedge ratio and spread
+        X = add_constant(prices2.values)
+        ols_model = OLS(prices1.values, X).fit()
+        hedge_ratio = ols_model.params[1]
+        
+        spread = prices1.values - hedge_ratio * prices2.values
+        
+        # 4. Calculate half-life
+        half_life = self.calculate_half_life(spread)
+        if np.isnan(half_life) or half_life < self.min_half_life or half_life > self.max_half_life:
+            return None  # Half-life out of acceptable range
+        
+        # 5. Calculate spread statistics
+        spread_mean = np.mean(spread)
+        spread_std = np.std(spread)
+        
+        # 6. Fit copula for ranking (on uniform transforms)
+        u_data = self.transform_to_uniform(returns1.values)
+        v_data = self.transform_to_uniform(returns2.values)
+        
+        copula_model = self.copula_fitter.fit_copula(u_data, v_data)
+        copula_log_lik = copula_model.get("log_l", -np.inf)
+
+        return {
+            "etf1": etf1,
+            "etf2": etf2,
+            "spearman_corr": corr,
+            "coint_pvalue": pvalue,
+            "hedge_ratio": hedge_ratio,
+            "half_life": half_life,
+            "spread_mean": spread_mean,
+            "spread_std": spread_std,
+            "copula_type": copula_model.get("copula_type"),
+            "copula_log_lik": copula_log_lik,
+            "copula_model": copula_model  # Store the fitted model
+        }
+    
+    def transform_to_uniform(self, data):
+        """
+        Transform data to uniform distribution using empirical CDF
+        """
+        data_clean = data[np.isfinite(data)]
+        if len(data_clean) < 10:
+            return np.full(len(data), 0.5)
+        
+        n = len(data_clean)
+        ranks = pd.Series(data_clean).rank(method='average').values
+        uniform = ranks / (n + 1)  # Avoid 0 and 1
+        return np.clip(uniform, 1e-6, 1-1e-6)
+    
+    def calculate_composite_score(self, pair):
+        """
+        Calculate composite ranking score based on multiple factors
+        """
+        # Lower p-value is better (stronger cointegration)
+        coint_score = -np.log10(pair["coint_pvalue"] + 1e-10)
+        
+        # Half-life closer to 20 days is ideal
+        half_life_score = 1 / (1 + abs(pair["half_life"] - 20) / 20)
+        
+        # Higher correlation (in absolute terms) is better
+        corr_score = abs(pair["spearman_corr"])
+        
+        # Higher copula likelihood indicates better dependence structure
+        copula_score = 1 / (1 + np.exp(-pair["copula_log_lik"] / 100))
+        
+        # Weighted composite score
+        weights = {
+            "coint": 0.4,
+            "half_life": 0.3,
+            "corr": 0.15,
+            "copula": 0.15
+        }
+        
+        composite = (weights["coint"] * coint_score +
+                    weights["half_life"] * half_life_score +
+                    weights["corr"] * corr_score +
+                    weights["copula"] * copula_score)
+        
+        return composite
+    
+    def run_selection(self):
+        """
+        Run comprehensive pair selection with all filters
+        """
+        print("Starting enhanced pair selection...")
+        train_prices, train_returns = self.get_train_data()
+        etf_list = sorted(train_prices.columns.tolist())
+
+        candidate_pairs = []
+        total_tested = 0
+        
+        for etf1, etf2 in combinations(etf_list, 2):
+            total_tested += 1
+            #if total_tested % 100 == 0:
+                #print(f"  Tested {total_tested} pairs, found {len(candidate_pairs)} candidates...")
+            
+            metrics = self.calculate_pair_metrics(etf1, etf2, train_prices, train_returns)
+            if metrics is not None:
+                candidate_pairs.append(metrics)
+        
+        print(f"\nPair Selection Summary:")
+        print(f"  Total pairs tested: {total_tested}")
+        print(f"  Pairs passing correlation filter: ~{int(total_tested * 0.3)}")
+        print(f"  Pairs passing cointegration test (p<{self.coint_pvalue}): {len(candidate_pairs)}")
+        print(f"  Pairs with valid half-life ({self.min_half_life}-{self.max_half_life} days): {len(candidate_pairs)}")
+        
+        if not candidate_pairs:
+            print("WARNING: No pairs passed all filters!")
+            return []
+        
+        # Calculate composite scores and rank
+        for pair in candidate_pairs:
+            pair["composite_score"] = self.calculate_composite_score(pair)
+        
+        # Sort by composite score
+        ranked_pairs = sorted(candidate_pairs, key=lambda x: x["composite_score"], reverse=True)
+        selected_pairs = ranked_pairs[:self.top_n]
+
+        print(f"\nSelected top {len(selected_pairs)} pairs:")
+        
+        # Output selected pairs as dataframe for inspection
+        display_cols = ["etf1", "etf2", "coint_pvalue", "half_life", 
+                       "spearman_corr", "copula_type", "composite_score"]
+        selected_pairs_df = pd.DataFrame(selected_pairs)[display_cols]
+        selected_pairs_df["half_life"] = selected_pairs_df["half_life"].round(1)
+        selected_pairs_df["coint_pvalue"] = selected_pairs_df["coint_pvalue"].round(4)
+        selected_pairs_df["spearman_corr"] = selected_pairs_df["spearman_corr"].round(3)
+        selected_pairs_df["composite_score"] = selected_pairs_df["composite_score"].round(3)
+        print(selected_pairs_df.to_string(index=False))
+        
+        return selected_pairs
+
 
 if __name__ == "__main__":
     prices = pd.read_csv(os.path.join(PROCESSED_DIR, "cleaned_prices.csv"), index_col=0, parse_dates=True)
     returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
-    selector = PairSelector(prices, returns)
+    
+    train_end = pd.to_datetime("2023-12-31")
+    test_end = pd.to_datetime("2024-12-31")
+    
+    selector = PairSelector(
+        prices, returns, 
+        train_end_date=train_end,
+        test_end_date=test_end,
+        top_n=10,
+        coint_pvalue=0.01,  # Strict cointegration
+        min_half_life=5,     # Fast enough mean reversion
+        max_half_life=60     # Not too slow
+    )
+    
     selected_pairs = selector.run_selection()
     test_prices, test_returns = selector.get_test_data()
+    
     print(f"\nReady for signal generation on {len(test_prices)} test days")
