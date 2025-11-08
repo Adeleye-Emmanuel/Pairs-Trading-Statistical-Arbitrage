@@ -168,10 +168,10 @@ class PairSelector():
         
         # Weighted composite score
         weights = {
-            "coint": 0.4,
-            "half_life": 0.3,
-            "corr": 0.15,
-            "copula": 0.15
+            "coint": 0.4, # 0.4
+            "half_life": 0.3,  # 0.3
+            "corr": 0.15,   # 0.15
+            "copula": 0.15  # 0.15
         }
         
         composite = (weights["coint"] * coint_score +
@@ -194,9 +194,6 @@ class PairSelector():
         
         for etf1, etf2 in combinations(etf_list, 2):
             total_tested += 1
-            #if total_tested % 100 == 0:
-                #print(f"  Tested {total_tested} pairs, found {len(candidate_pairs)} candidates...")
-            
             metrics = self.calculate_pair_metrics(etf1, etf2, train_prices, train_returns)
             if metrics is not None:
                 candidate_pairs.append(metrics)
@@ -248,7 +245,7 @@ if __name__ == "__main__":
         top_n=10,
         coint_pvalue=0.01,  # Strict cointegration
         min_half_life=5,     # Fast enough mean reversion
-        max_half_life=60     # Not too slow
+        max_half_life=40     # Not too slow
     )
     
     selected_pairs = selector.run_selection()

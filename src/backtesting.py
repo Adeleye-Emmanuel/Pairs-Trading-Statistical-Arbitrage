@@ -267,12 +267,13 @@ class ImprovedBacktester:
         """
         Run comprehensive backtest with all improvements
         """
-        print(f"\n{'='*60}")
-        print("RUNNING BACKTEST")
-        print(f"{'='*60}")
-        
+
         all_pair_results = {}
-        
+        pair_names = []
+        entry_counts = []
+        exit_counts = []
+        pair_returns = []
+        pair_sharpes = []
         # Process each pair
         for pair_name, signals in all_signals.items():
             if signals is None or signals.empty:
@@ -287,15 +288,24 @@ class ImprovedBacktester:
                 # Report pair statistics
                 entries = signals[signals["entry_signal"] == True]
                 exits = signals[signals["exit_signal"] == True]
-                
-                print(f"\n  {pair_name}:")
-                print(f"    Entries: {len(entries)}, Exits: {len(exits)}")
-                
+                pair_names.append(pair_name)
+                entry_counts.append(len(entries))
+                exit_counts.append(len(exits))
                 if "net_ret" in pair_results.columns:
                     pair_total_ret = (1 + pair_results["net_ret"]).prod() - 1
                     pair_sharpe = (pair_results["net_ret"].mean() * 252) / (pair_results["net_ret"].std() * np.sqrt(252))
-                    print(f"    Pair Return: {pair_total_ret:.2%}")
-                    print(f"    Pair Sharpe: {pair_sharpe:.2f}")
+                    pair_sharpes.append(pair_sharpe)
+                    pair_returns.append(pair_total_ret)
+        
+        all_pair_stats = pd.DataFrame({
+            "Pair": pair_names,
+            "Entries": entry_counts,
+            "Exits": exit_counts,
+            "Total Return": pair_returns,
+            "Sharpe Ratio": pair_sharpes}).sort_values(by="Sharpe Ratio", ascending=False).reset_index(drop=True)
+        
+        print("\nIndividual Pair Statistics")
+        print(all_pair_stats)            
         
         if not all_pair_results:
             print("\nNo valid pairs to backtest!")
@@ -317,10 +327,6 @@ def run_complete_backtest():
     # Load data
     prices = pd.read_csv(os.path.join(PROCESSED_DIR, "cleaned_prices.csv"), index_col=0, parse_dates=True)
     returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
-    
-    # Set dates
-    train_end = pd.to_datetime("2023-12-31")
-    test_end = pd.to_datetime("2024-12-31")
 
     test_periods = [
         (pd.to_datetime("2021-01-01"), pd.to_datetime("2021-12-31")),
@@ -330,24 +336,37 @@ def run_complete_backtest():
         (pd.to_datetime("2025-01-01"), pd.to_datetime("2025-12-31")),
     ]
     
-    sharpe_ratios = []
+    pure_z_sharpe_ratios = []
+    pure_z_returns = []
+    pure_z_win_rates = []
+    pure_z_drawdowns = []
+
+    z_c_veto_sharpe_ratios = []
+    z_c_veto_returns = []
+    z_c_veto_win_rates = []
+    z_c_veto_drawdowns = []
+
+    z_c_scale_sharpe_ratios = []
+    z_c_scale_returns = []
+    z_c_scale_win_rates = []
+    z_c_scale_drawdowns = []
 
     for start_date, end_date in test_periods:
         print(f"\n\n{'='*80}")
         print(f"TEST PERIOD: {start_date.date()} to {end_date.date()}")
         print(f"{'='*80}")
     
-        print("\nSTEP 1: PAIR SELECTION")
+        print("\nPAIR SELECTION")
         print("="*60)
         
         selector = PairSelector(
             prices, returns,
             train_end_date=start_date - pd.DateOffset(days=1),
             test_end_date=end_date,
-            top_n=15,
-            coint_pvalue=0.01,
+            top_n=4,
+            coint_pvalue=0.05,
             min_half_life=5,
-            max_half_life=60
+            max_half_life=90
         )
         
         selected_pairs = selector.run_selection()
@@ -357,7 +376,7 @@ def run_complete_backtest():
             return
         
         # Step 2: Signal Generation
-        print("\nSTEP 2: SIGNAL GENERATION")
+        print("\nSIGNAL GENERATION")
         print("="*60)
         
         test_prices, test_returns = selector.get_test_data()
@@ -378,16 +397,16 @@ def run_complete_backtest():
             
             # Generate signals
             signal_gen = OptimizedSignalGenerator(
-                entry_z_score=1.5,
+                entry_z_score=2.75,
+                exit_z_score=0.4,
                 use_copula_filter=config["use_copula"],
                 position_scale_by_conviction=config["scale"],
-                copula_veto_threshold=0.7  # Only veto if copula strongly disagrees
+                copula_veto_threshold=0.35  # Only veto if copula strongly disagrees
             )
             
             all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
         
-            # Step 3: Backtesting
-            print("\nSTEP 3: BACKTESTING")
+            print("\nBACKTESTING")
             print("="*60)
             
             backtester = ImprovedBacktester(
@@ -403,28 +422,50 @@ def run_complete_backtest():
             
             results[config["name"]] = metrics
         
-        # Display comparison
-        print(f"\n\n{'='*80}")
-        print("STRATEGY COMPARISON")
-        print(f"{'='*80}")
+            # Display comparison
+            print(f"\n\n{'='*80}")
+            print("STRATEGY COMPARISON")
+            print(f"{'='*80}")        
+            # Save results
+            if len(portfolio) > 0:
+                portfolio.to_csv(os.path.join(BACKTEST_DIR, "improved_backtest_results.csv"))
+                print(f"\nResults saved to {BACKTEST_DIR}/improved_backtest_results.csv")
+            if config["name"] == "Pure Z-Score":
+                pure_z_sharpe_ratios.append(metrics.get("Sharpe Ratio", "N/A"))
+                pure_z_returns.append(metrics.get("Total Return", "N/A"))
+                pure_z_win_rates.append(metrics.get("Win Rate (Daily)", "N/A"))
+                pure_z_drawdowns.append(metrics.get("Maximum Drawdown", "N/A"))
+            elif config["name"] == "Z + Copula Veto":
+                z_c_veto_sharpe_ratios.append(metrics.get("Sharpe Ratio", "N/A"))
+                z_c_veto_returns.append(metrics.get("Total Return", "N/A"))
+                z_c_veto_win_rates.append(metrics.get("Win Rate (Daily)", "N/A"))
+                z_c_veto_drawdowns.append(metrics.get("Maximum Drawdown", "N/A"))
+            elif config["name"] == "Z + Copula Scaling":
+                z_c_scale_sharpe_ratios.append(metrics.get("Sharpe Ratio", "N/A"))
+                z_c_scale_returns.append(metrics.get("Total Return", "N/A"))
+                z_c_scale_win_rates.append(metrics.get("Win Rate (Daily)", "N/A"))
+                z_c_scale_drawdowns.append(metrics.get("Maximum Drawdown", "N/A"))
         
-        for strategy, metrics in results.items():
-            print(f"\n{strategy}:")
-            print(f"  Sharpe Ratio: {metrics.get('Sharpe Ratio', 'N/A')}")
-            print(f"  Total Return: {metrics.get('Total Return', 'N/A')}")
-            print(f"  Max Drawdown: {metrics.get('Maximum Drawdown', 'N/A')}")
-            print(f"  Win Rate: {metrics.get('Win Rate (Daily)', 'N/A')}")
-        
-        
-        # Save results
-        if len(portfolio) > 0:
-            portfolio.to_csv(os.path.join(BACKTEST_DIR, "improved_backtest_results.csv"))
-            print(f"\nResults saved to {BACKTEST_DIR}/improved_backtest_results.csv")
-        
-        sharpe_ratios.append(metrics.get("Sharpe Ratio", "N/A"))
     # Dataframe of Periods and Sharpe Ratios
     df = pd.DataFrame(test_periods, columns=["Start Date", "End Date"])
-    df["Sharpe Ratio"] = sharpe_ratios
+    print("PZ = Pure Z-Score, ZCV = Z + Copula Veto, ZCS = Z + Copula Scaling") #, Win_R = Win Rate, Max_D = Max Drawdown")
+
+    df["PZ Sharpe"] = pure_z_sharpe_ratios
+    df["ZCV Sharpe"] = z_c_veto_sharpe_ratios if z_c_veto_sharpe_ratios else [np.nan]*len(test_periods)
+    df["ZCS Sharpe"] = z_c_scale_sharpe_ratios if z_c_scale_sharpe_ratios else [np.nan]*len(test_periods)
+
+    df["PZ Return"] = pure_z_returns
+    df["ZCV Return"] = z_c_veto_returns if z_c_veto_returns else [np.nan]*len(test_periods)
+    df["ZCS Return"] = z_c_scale_returns if z_c_scale_returns else [np.nan]*len(test_periods)
+
+    df["PZ Win_R"] = pure_z_win_rates
+    df["ZCV Win_R"] = z_c_veto_win_rates
+    df["ZCS Win_R"] = z_c_scale_win_rates
+
+    df["PZ Max_D"] = pure_z_drawdowns
+    df["ZCV Max_D"] = z_c_veto_drawdowns
+    df["ZCS Max_D"] = z_c_scale_drawdowns 
+    
     print("\n\nSharpe Ratios by Test Period:")
     print(df)
     return results, portfolio, metrics

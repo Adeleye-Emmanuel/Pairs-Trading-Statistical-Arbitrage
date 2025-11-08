@@ -14,11 +14,11 @@ class OptimizedSignalGenerator:
     """
     
     def __init__(self, 
-                 lookback_days=60,
+                 lookback_days=30, # 60
                  # Primary signal: Z-score
-                 entry_z_score=2.0,
-                 exit_z_score=0.5,
-                 stop_loss_z_score=3.5,
+                 entry_z_score=2.0, # 2.0
+                 exit_z_score=0.35, # 0.35
+                 stop_loss_z_score=4.5, # 4.5
                  # Copula as filter (not requirement)
                  use_copula_filter=True,
                  copula_veto_threshold=0.5,  # Only veto if copula strongly disagrees
@@ -50,8 +50,8 @@ class OptimizedSignalGenerator:
     def calculate_spread_zscore(self, prices, etf1, etf2, hedge_ratio, lookback):
         """Calculate z-score of the spread"""
         spread = prices[etf1] - hedge_ratio * prices[etf2]
-        spread_mean = spread.rolling(lookback, min_periods=20).mean()
-        spread_std = spread.rolling(lookback, min_periods=20).std()
+        spread_mean = spread.rolling(lookback).mean()
+        spread_std = spread.rolling(lookback).std()
         z_score = (spread - spread_mean) / (spread_std + 1e-8)
         return spread, z_score
     
@@ -136,7 +136,7 @@ class OptimizedSignalGenerator:
         """Generate trading signals with copula as filter/scaler"""
         
         pair_name = f"{pair_data['etf1']}_{pair_data['etf2']}"
-        print(f"\nGenerating optimized signals for {pair_name}...")
+        #print(f"\nGenerating optimized signals for {pair_name}...")
         
         if start_date:
             prices_df = prices_df[start_date:]
@@ -287,31 +287,26 @@ class OptimizedSignalGenerator:
         num_entries = results["entry_signal"].sum()
         num_exits = results["exit_signal"].sum()
         
-        print(f"  Signals: {num_entries} entries, {num_exits} exits")
-        
-        if self.use_copula_filter:
-            print(f"  Copula impact:")
-            print(f"    - Signals vetoed: {signals_vetoed}/{signals_generated} ({signals_vetoed/max(signals_generated,1)*100:.1f}%)")
-            if self.position_scale_by_conviction:
-                print(f"    - Positions scaled up: {signals_scaled_up}")
-                print(f"    - Positions scaled down: {signals_scaled_down}")
+        # if self.use_copula_filter:
+        #     print(f"  Copula impact:")
+        #     print(f"    - Signals vetoed: {signals_vetoed}/{signals_generated} ({signals_vetoed/max(signals_generated,1)*100:.1f}%)")
+        #     if self.position_scale_by_conviction:
+        #         print(f"    - Positions scaled up: {signals_scaled_up}")
+        #         print(f"    - Positions scaled down: {signals_scaled_down}")
         
         # Show copula agreement distribution
         if "copula_agreement" in results.columns and num_entries > 0:
             entry_agreements = results[results["entry_signal"] == True]["copula_agreement"].dropna()
-            if len(entry_agreements) > 0:
-                print(f"    - Avg agreement on entries: {entry_agreements.mean():.2f}")
+            # if len(entry_agreements) > 0:
+            #     print(f"    - Avg agreement on entries: {entry_agreements.mean():.2f}")
         
         return results
     
     def generate_batch_signals(self, prices_df, selected_pairs, start_date=None, end_date=None):
         """Generate signals for all pairs"""
+        
         all_signals = {}
-        
-        print(f"\n{'='*60}")
-        print(f"OPTIMIZED SIGNAL GENERATION")
-        print(f"{'='*60}")
-        
+
         total_entries = 0
         total_vetoed = 0
         
@@ -346,9 +341,9 @@ def test_optimized_strategy():
     # Run pair selection
     selector = PairSelector(
         prices, returns,
-        train_end_date=pd.to_datetime("2023-12-31"),
-        test_end_date=pd.to_datetime("2024-12-31"),
-        top_n=15,
+        train_end_date=pd.to_datetime("2022-12-31"),
+        test_end_date=pd.to_datetime("2025-10-31"),
+        top_n=5,
         coint_pvalue=0.05,
         min_half_life=5,
         max_half_life=90
@@ -360,20 +355,20 @@ def test_optimized_strategy():
     # Test configurations
     configs = [
         {"name": "Pure Z-Score", "use_copula": False, "scale": False},
-        {"name": "Z + Copula Veto", "use_copula": True, "scale": False},
-        {"name": "Z + Copula Scaling", "use_copula": True, "scale": True},
+       # {"name": "Z + Copula Veto", "use_copula": True, "scale": False},
+       # {"name": "Z + Copula Scaling", "use_copula": True, "scale": True},
     ]
     
     results = {}
     
     for config in configs:
         print(f"\n\n{'='*80}")
-        print(f"TESTING: {config['name']}")
+        print(f"TESTING: {config['name']}") 
         print(f"{'='*80}")
         
         # Generate signals
         signal_gen = OptimizedSignalGenerator(
-            entry_z_score=1.5,
+            entry_z_score=1.8,
             use_copula_filter=config["use_copula"],
             position_scale_by_conviction=config["scale"],
             copula_veto_threshold=0.7  # Only veto if copula strongly disagrees
