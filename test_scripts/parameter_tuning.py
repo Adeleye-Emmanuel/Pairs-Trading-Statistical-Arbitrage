@@ -62,12 +62,9 @@ prices = pd.read_csv(os.path.join(PROCESSED_DIR, "cleaned_prices.csv"), index_co
 returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
 
 PARAM_SPACE = {
-    "entry_z_score": np.arange(1.5, 3.6, 0.25).tolist(),         # 1.5, 1.75, ..., 3.5
+    "entry_z_score": np.arange(1.5, 2.8, 0.25).tolist(),         # 1.5, 1.75, ..., 2.75
     "exit_z_score": np.arange(0.1, 1.05, 0.1).tolist(),          # 0.1, 0.2, ..., 1.0
     "position_size_pct": np.arange(0.02, 0.21, 0.02).tolist(),   # 2%, 4%, ..., 20%
-    "top_n": list(range(3, 11)),                                 # 3–10
-    "coint_pvalue": np.arange(0.01, 0.051, 0.01).tolist(),       # 0.01, 0.02, ..., 0.05
-    "copula_veto_threshold": np.arange(0.1, 0.91, 0.05).tolist() # 0.1, 0.15, ..., 0.9
 }
 
 
@@ -79,10 +76,7 @@ def sample_params():
     if cfg["exit_z_score"] >= cfg["entry_z_score"]:
         cfg["exit_z_score"] = max(0.1, cfg["entry_z_score"] - 0.5)
     cfg["position_size_pct"] = float(random.choice(PARAM_SPACE["position_size_pct"]))
-    cfg["top_n"] = int(random.choice(PARAM_SPACE["top_n"]))
-    cfg["coint_pvalue"] = float(random.choice(PARAM_SPACE["coint_pvalue"]))
-    cfg["copula_veto_threshold"] = float(random.choice(PARAM_SPACE["copula_veto_threshold"]))
-    
+
     return cfg
 
 
@@ -107,8 +101,8 @@ def evaluate_single_period(cfg, train_end, test_start, test_end, seed=0):
             prices, returns,
             train_end_date=train_end,
             test_end_date=test_end,
-            top_n=cfg["top_n"],
-            coint_pvalue=cfg["coint_pvalue"],
+            top_n=5,
+            coint_pvalue=0.05,
             min_half_life=5,
             max_half_life=90
         )
@@ -124,7 +118,7 @@ def evaluate_single_period(cfg, train_end, test_start, test_end, seed=0):
         signal_gen = OptimizedSignalGenerator(
             entry_z_score=cfg["entry_z_score"],
             exit_z_score=cfg["exit_z_score"],
-            copula_veto_threshold=cfg["copula_veto_threshold"]
+            use_copula_filter=False
         )
         
         all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
@@ -135,7 +129,7 @@ def evaluate_single_period(cfg, train_end, test_start, test_end, seed=0):
             position_size_pct=cfg["position_size_pct"],
             tcost_bps=5,
             slippage_bps=3,
-            max_positions=cfg["top_n"],
+            max_positions=5,
             use_volatility_sizing=True
         )
         
@@ -158,7 +152,7 @@ def evaluate_single_period(cfg, train_end, test_start, test_end, seed=0):
         return -10.0
 
 
-def optimize_on_validation(period_config, n_trials=100, workers=1):
+def optimize_on_validation(period_config, n_trials=10, workers=1):
     """
     STEP 1: Optimize parameters on VALIDATION period only
     
@@ -225,7 +219,7 @@ def test_on_holdout(best_params, period_config):
     return test_sharpe
 
 
-def run_nested_walk_forward(n_trials=100, workers=1):
+def run_nested_walk_forward(n_trials=10, workers=1):
     """
     Run complete nested walk-forward validation
     
@@ -281,9 +275,9 @@ def run_nested_walk_forward(n_trials=100, workers=1):
             "best_entry_z": best_params["entry_z_score"],
             "best_exit_z": best_params["exit_z_score"],
             "best_position_size": best_params["position_size_pct"],
-            "best_top_n": best_params["top_n"],
-            "best_coint_pval": best_params["coint_pvalue"],
-            "best_veto_thresh": best_params["copula_veto_threshold"]
+            #"best_top_n": best_params["top_n"],
+            #"best_coint_pval": best_params["coint_pvalue"],
+            #"best_veto_thresh": best_params["copula_veto_threshold"]
         }
         
         all_results.append(result)

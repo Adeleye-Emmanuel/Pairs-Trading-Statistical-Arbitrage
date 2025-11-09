@@ -329,13 +329,13 @@ def run_complete_backtest():
     returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
 
     test_periods = [
-        (pd.to_datetime("2021-01-01"), pd.to_datetime("2021-12-31")),
-        (pd.to_datetime("2022-01-01"), pd.to_datetime("2022-12-31")),
-        (pd.to_datetime("2023-01-01"), pd.to_datetime("2023-12-31")),
-        (pd.to_datetime("2024-01-01"), pd.to_datetime("2024-12-31")),
+        #(pd.to_datetime("2021-01-01"), pd.to_datetime("2021-12-31")),
+        #(pd.to_datetime("2022-01-01"), pd.to_datetime("2022-12-31")),
+        #(pd.to_datetime("2023-01-01"), pd.to_datetime("2023-12-31")),
+        #(pd.to_datetime("2024-01-01"), pd.to_datetime("2024-12-31")),
         (pd.to_datetime("2025-01-01"), pd.to_datetime("2025-12-31")),
     ]
-    
+
     pure_z_sharpe_ratios = []
     pure_z_returns = []
     pure_z_win_rates = []
@@ -363,7 +363,7 @@ def run_complete_backtest():
             prices, returns,
             train_end_date=start_date - pd.DateOffset(days=1),
             test_end_date=end_date,
-            top_n=4,
+            top_n=5,
             coint_pvalue=0.05,
             min_half_life=5,
             max_half_life=90
@@ -397,11 +397,11 @@ def run_complete_backtest():
             
             # Generate signals
             signal_gen = OptimizedSignalGenerator(
-                entry_z_score=2.75,
-                exit_z_score=0.4,
+                entry_z_score=2,
+                exit_z_score=0.9,
                 use_copula_filter=config["use_copula"],
                 position_scale_by_conviction=config["scale"],
-                copula_veto_threshold=0.35  # Only veto if copula strongly disagrees
+                copula_veto_threshold=0.8  # Only veto if copula strongly disagrees
             )
             
             all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
@@ -411,7 +411,7 @@ def run_complete_backtest():
             
             backtester = ImprovedBacktester(
                 initial_capital=100_000,
-                position_size_pct=0.1,
+                position_size_pct=0.14,
                 tcost_bps=5,
                 slippage_bps=3,
                 max_positions=5,
@@ -471,3 +471,29 @@ def run_complete_backtest():
     return results, portfolio, metrics
 if __name__ == "__main__":
     results, portfolio, metrics = run_complete_backtest()
+
+#Summary:
+# Optimum parameter for testing period 2022-01-01 to 2022-12-31: 
+    # Entries: 14 pure z score, 14 for copula influenced
+    # Entry Z-Score: 2.0
+    # Exit Z-Score: 0.9
+    # Position Size: 14%
+    # Sharpe, Return: 1.88, 14.90% (pure z), 1.89, 14.95% (copula influenced)
+# Optimum parameter for testing period 2023-01-01 to 2023-12-31:    
+    # Entries: 14 pure z score, 14 for copula influenced
+    # Entry Z-Score: 1.5
+    # Exit Z-Score: 0.6
+    # Position Size: 10%
+    # Sharpe, Return: 0.26, 2.56%% (pure z), 0.25, 2.49%% (copula influenced)
+# Optimum parameter for testing period 2024-01-01 to 2024-12-31: 
+    # Entries: 14 pure z score, 14 for copula influenced
+    # Entry Z-Score: 2.0
+    # Exit Z-Score: 0.6
+    # Position Size: 20%%
+    # Sharpe, Return: 2.6, 20.50% (pure z), 1.78, 28.11% (copula influenced)
+# Optimum parameter for testing period 2025-01-01 to 2025-12-31: 
+    # Entries: 14 pure z score, 14 for copula influenced
+    # Entry Z-Score: 2.0
+    # Exit Z-Score: 0.9
+    # Position Size: 14%
+    # Sharpe, Return: -0.62, -5.11% (pure z), 3.04, 14.49% (copula influenced)
