@@ -20,8 +20,8 @@ class OptimizedSignalGenerator:
                  exit_z_score=0.35, # 0.35
                  stop_loss_z_score=4.5, # 4.5
                  # Copula as filter (not requirement)
-                 use_copula_filter=True,
-                 copula_veto_threshold=0.5,  # Only veto if copula strongly disagrees
+                 use_copula_filter=False,
+                 copula_veto_threshold=0.8,  # Only veto if copula strongly disagrees
                  # Position management
                  max_holding_days=30,
                  position_scale_by_conviction=True):

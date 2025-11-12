@@ -329,10 +329,9 @@ def run_complete_backtest():
     returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
 
     test_periods = [
-        #(pd.to_datetime("2021-01-01"), pd.to_datetime("2021-12-31")),
-        #(pd.to_datetime("2022-01-01"), pd.to_datetime("2022-12-31")),
-        #(pd.to_datetime("2023-01-01"), pd.to_datetime("2023-12-31")),
-        #(pd.to_datetime("2024-01-01"), pd.to_datetime("2024-12-31")),
+        (pd.to_datetime("2022-01-01"), pd.to_datetime("2022-12-31")),
+        (pd.to_datetime("2023-01-01"), pd.to_datetime("2023-12-31")),
+        (pd.to_datetime("2024-01-01"), pd.to_datetime("2024-12-31")),
         (pd.to_datetime("2025-01-01"), pd.to_datetime("2025-12-31")),
     ]
 
@@ -351,7 +350,24 @@ def run_complete_backtest():
     z_c_scale_win_rates = []
     z_c_scale_drawdowns = []
 
+    # best_param_results = {"2022": {"entry":2.0, "exit":0.9, "position_size":0.18}, 
+    #                       "2023": {"entry":1.5, "exit":0.6, "position_size":0.1}, 
+    #                       "2024": {"entry":2.0, "exit":0.6, "position_size":0.2}, 
+    #                       "2025": {"entry":2.0, "exit":0.9, "position_size":0.14}}
+    best_param_results = {"2022": {"entry":2.75, "exit":0.4, "position_size":0.2}, 
+                          "2023": {"entry":1.75, "exit":0.4, "position_size":0.1}, 
+                          "2024": {"entry":2.0, "exit":0.7, "position_size":0.14}, 
+                          "2025": {"entry":2.25, "exit":0.9, "position_size":0.16}}
     for start_date, end_date in test_periods:
+        if start_date.year == 2022:
+            best_params = best_param_results["2022"]
+        elif start_date.year == 2023:
+            best_params = best_param_results["2023"]
+        elif start_date.year == 2024:
+            best_params = best_param_results["2024"]
+        elif start_date.year == 2025:
+            best_params = best_param_results["2025"]
+
         print(f"\n\n{'='*80}")
         print(f"TEST PERIOD: {start_date.date()} to {end_date.date()}")
         print(f"{'='*80}")
@@ -397,8 +413,8 @@ def run_complete_backtest():
             
             # Generate signals
             signal_gen = OptimizedSignalGenerator(
-                entry_z_score=2,
-                exit_z_score=0.9,
+                entry_z_score=best_params["entry"],
+                exit_z_score=best_params["exit"],
                 use_copula_filter=config["use_copula"],
                 position_scale_by_conviction=config["scale"],
                 copula_veto_threshold=0.8  # Only veto if copula strongly disagrees
@@ -411,7 +427,7 @@ def run_complete_backtest():
             
             backtester = ImprovedBacktester(
                 initial_capital=100_000,
-                position_size_pct=0.14,
+                position_size_pct=best_params["position_size"],
                 tcost_bps=5,
                 slippage_bps=3,
                 max_positions=5,
@@ -475,25 +491,33 @@ if __name__ == "__main__":
 #Summary:
 # Optimum parameter for testing period 2022-01-01 to 2022-12-31: 
     # Entries: 14 pure z score, 14 for copula influenced
-    # Entry Z-Score: 2.0
-    # Exit Z-Score: 0.9
-    # Position Size: 14%
-    # Sharpe, Return: 1.88, 14.90% (pure z), 1.89, 14.95% (copula influenced)
+    # Entry Z-Score: 2.0, 1.75
+    # Exit Z-Score: 0.9, 0.1
+    # Position Size: 14%, 16%
+    # Sharpe, Return: 1.88, 14.90% (pure z), 1.89, 14.95% (copula influenced) - 10 trials
+    # Sharpe, Return: 0.19, 1.83% (pure z), 0.49, 3.63% (copula influenced) - 100 trials
+    # Sharpe, Return: -0.63, -3.13% (pure z), 0.01, 0.93% (copula influenced) - 10 trails (max entry 2.25)
 # Optimum parameter for testing period 2023-01-01 to 2023-12-31:    
     # Entries: 14 pure z score, 14 for copula influenced
-    # Entry Z-Score: 1.5
-    # Exit Z-Score: 0.6
-    # Position Size: 10%
-    # Sharpe, Return: 0.26, 2.56%% (pure z), 0.25, 2.49%% (copula influenced)
+    # Entry Z-Score: 1.5, 1.75
+    # Exit Z-Score: 0.6, 0.5
+    # Position Size: 10%, 12%
+    # Sharpe, Return: 0.26, 2.56%% (pure z), 0.25, 2.49%% (copula influenced) - 10 trials
+    # Sharpe, Return: 0.17, 1.68% (pure z), 0.19, 1.84% (copula influenced) - 100 trials
+    # Sharpe, Return: 0.58, 4.67% (pure z), 0.62, 5.02% (copula influenced) - 10 trails (max entry 2.25)
 # Optimum parameter for testing period 2024-01-01 to 2024-12-31: 
     # Entries: 14 pure z score, 14 for copula influenced
-    # Entry Z-Score: 2.0
-    # Exit Z-Score: 0.6
-    # Position Size: 20%%
-    # Sharpe, Return: 2.6, 20.50% (pure z), 1.78, 28.11% (copula influenced)
+    # Entry Z-Score: 2.0, 2.0
+    # Exit Z-Score: 0.6, 0.7
+    # Position Size: 20%%, 12%
+    # Sharpe, Return: 2.6, 20.50% (pure z), 1.78, 28.11% (copula influenced) - 10 trials
+    # Sharpe, Return: 2.68, 38.5% (pure z), 1.85, 29.16%% (copula influenced) - 100 trials
+    # Sharpe, Return: 2.6, 37.36% (pure z), 1.78, 28.11% (copula influenced) - 10 trails (max entry 2.25)
 # Optimum parameter for testing period 2025-01-01 to 2025-12-31: 
     # Entries: 14 pure z score, 14 for copula influenced
-    # Entry Z-Score: 2.0
-    # Exit Z-Score: 0.9
-    # Position Size: 14%
-    # Sharpe, Return: -0.62, -5.11% (pure z), 3.04, 14.49% (copula influenced)
+    # Entry Z-Score: 2.0, 2.25
+    # Exit Z-Score: 0.9, 0.7
+    # Position Size: 14%, 8%
+    # Sharpe, Return: -0.62, -5.11% (pure z), 3.04, 14.49% (copula influenced) - 10 trials
+    # Sharpe, Return: -0.56, -4.6% (pure z), 1.81, 6.98% (copula influenced) - 100 trials
+    # Sharpe, Return: -0.41, -3.18% (pure z), 2.33, 9.45% (copula influenced) - 10 trails (max entry 2.25)

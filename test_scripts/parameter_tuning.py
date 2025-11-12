@@ -62,7 +62,7 @@ prices = pd.read_csv(os.path.join(PROCESSED_DIR, "cleaned_prices.csv"), index_co
 returns = pd.read_csv(os.path.join(PROCESSED_DIR, "log_returns.csv"), index_col=0, parse_dates=True)
 
 PARAM_SPACE = {
-    "entry_z_score": np.arange(1.5, 2.8, 0.25).tolist(),         # 1.5, 1.75, ..., 2.75
+    "entry_z_score": np.arange(1.5, 3.75, 0.25).tolist(),         # 1.5, 1.75, ..., 3.5
     "exit_z_score": np.arange(0.1, 1.05, 0.1).tolist(),          # 0.1, 0.2, ..., 1.0
     "position_size_pct": np.arange(0.02, 0.21, 0.02).tolist(),   # 2%, 4%, ..., 20%
 }
@@ -118,7 +118,7 @@ def evaluate_single_period(cfg, train_end, test_start, test_end, seed=0):
         signal_gen = OptimizedSignalGenerator(
             entry_z_score=cfg["entry_z_score"],
             exit_z_score=cfg["exit_z_score"],
-            use_copula_filter=False
+            copula_veto_threshold=0.5
         )
         
         all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
@@ -275,9 +275,6 @@ def run_nested_walk_forward(n_trials=10, workers=1):
             "best_entry_z": best_params["entry_z_score"],
             "best_exit_z": best_params["exit_z_score"],
             "best_position_size": best_params["position_size_pct"],
-            #"best_top_n": best_params["top_n"],
-            #"best_coint_pval": best_params["coint_pvalue"],
-            #"best_veto_thresh": best_params["copula_veto_threshold"]
         }
         
         all_results.append(result)
@@ -341,7 +338,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Nested Walk-Forward Parameter Optimization")
-    parser.add_argument("--trials", type=int, default=100, 
+    parser.add_argument("--trials", type=int, default=10, 
                        help="Number of random parameter trials per validation period")
     parser.add_argument("--workers", type=int, default=4, 
                        help="Parallel workers (currently single-threaded in corrected version)")
