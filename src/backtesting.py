@@ -16,15 +16,10 @@ class ImprovedBacktester:
                  max_positions=5,            # Maximum concurrent positions
                  use_volatility_sizing=True,
                  target_vol=0.05):           # 5% daily volatility target
-        """
-        Realistic backtester with proper transaction costs and risk management
-        
-        Total cost per round trip = 4 legs × (tcost + slippage) = 4 × 8 = 32 bps
-        """
-        
+
         self.initial_capital = initial_capital
         self.position_size_pct = position_size_pct
-        self.tcost = tcost_bps / 10000  # Convert to decimal
+        self.tcost = tcost_bps / 10000  
         self.slippage = slippage_bps / 10000
         self.max_positions = max_positions
         self.use_volatility_sizing = use_volatility_sizing
@@ -55,7 +50,7 @@ class ImprovedBacktester:
 
     def calculate_daily_pnl(self, prices_df, signals, pair_name):
         """
-        Calculate realistic P&L with proper transaction costs
+        Calculating realistic P&L with proper transaction costs
         """
         etf1, etf2 = pair_name.split("_")
         
@@ -78,7 +73,7 @@ class ImprovedBacktester:
         # Get hedge ratio (from signals or recalculate)
         if "hr_roll" not in data.columns:
             # Use static hedge ratio from pair selection
-            data["hr_roll"] = 1.0  # Default if not provided
+            data["hr_roll"] = 1.0 
         else:
             data["hr_roll"] = data["hr_roll"].ffill()
         
@@ -350,14 +345,11 @@ def run_complete_backtest():
     z_c_scale_win_rates = []
     z_c_scale_drawdowns = []
 
-    # best_param_results = {"2022": {"entry":2.0, "exit":0.9, "position_size":0.18}, 
-    #                       "2023": {"entry":1.5, "exit":0.6, "position_size":0.1}, 
-    #                       "2024": {"entry":2.0, "exit":0.6, "position_size":0.2}, 
-    #                       "2025": {"entry":2.0, "exit":0.9, "position_size":0.14}}
-    best_param_results = {"2022": {"entry":2.75, "exit":0.4, "position_size":0.2}, 
-                          "2023": {"entry":1.75, "exit":0.4, "position_size":0.1}, 
-                          "2024": {"entry":2.0, "exit":0.7, "position_size":0.14}, 
-                          "2025": {"entry":2.25, "exit":0.9, "position_size":0.16}}
+    best_param_results = {"2022": {"entry":2.0, "exit":0.9, "position_size":0.18}, 
+                           "2023": {"entry":1.5, "exit":0.6, "position_size":0.1}, 
+                           "2024": {"entry":2.0, "exit":0.6, "position_size":0.2}, 
+                           "2025": {"entry":2.0, "exit":0.9, "position_size":0.14}}
+    
     for start_date, end_date in test_periods:
         if start_date.year == 2022:
             best_params = best_param_results["2022"]
@@ -421,7 +413,7 @@ def run_complete_backtest():
             )
             
             all_signals = signal_gen.generate_batch_signals(test_prices, selected_pairs)
-        
+
             print("\nBACKTESTING")
             print("="*60)
             
@@ -435,7 +427,6 @@ def run_complete_backtest():
             )
             
             portfolio, metrics = backtester.run_backtest(test_prices, all_signals)
-            
             results[config["name"]] = metrics
         
             # Display comparison
@@ -444,8 +435,8 @@ def run_complete_backtest():
             print(f"{'='*80}")        
             # Save results
             if len(portfolio) > 0:
-                portfolio.to_csv(os.path.join(BACKTEST_DIR, "improved_backtest_results.csv"))
-                print(f"\nResults saved to {BACKTEST_DIR}/improved_backtest_results.csv")
+                pd.DataFrame(portfolio).to_csv(os.path.join(BACKTEST_DIR, f"{start_date.year}_copula_{config['use_copula']}_improved_backtest_portfolio.csv"))
+                pd.DataFrame([metrics]).to_csv(os.path.join(BACKTEST_DIR, f"{start_date.year}_copula_{config['use_copula']}_improved_backtest_metrics.csv"))
             if config["name"] == "Pure Z-Score":
                 pure_z_sharpe_ratios.append(metrics.get("Sharpe Ratio", "N/A"))
                 pure_z_returns.append(metrics.get("Total Return", "N/A"))
@@ -464,7 +455,7 @@ def run_complete_backtest():
         
     # Dataframe of Periods and Sharpe Ratios
     df = pd.DataFrame(test_periods, columns=["Start Date", "End Date"])
-    print("PZ = Pure Z-Score, ZCV = Z + Copula Veto, ZCS = Z + Copula Scaling") #, Win_R = Win Rate, Max_D = Max Drawdown")
+    print("PZ = Pure Z-Score, ZCV = Z + Copula Veto, ZCS = Z + Copula Scaling, Win_R = Win Rate, Max_D = Max Drawdown")
 
     df["PZ Sharpe"] = pure_z_sharpe_ratios
     df["ZCV Sharpe"] = z_c_veto_sharpe_ratios if z_c_veto_sharpe_ratios else [np.nan]*len(test_periods)
@@ -484,11 +475,14 @@ def run_complete_backtest():
     
     print("\n\nSharpe Ratios by Test Period:")
     print(df)
+    df.to_csv(os.path.join(BACKTEST_DIR, "performance_summary.csv"))
+    
     return results, portfolio, metrics
+
 if __name__ == "__main__":
     results, portfolio, metrics = run_complete_backtest()
 
-#Summary:
+#Summary of parameters tuning results:
 # Optimum parameter for testing period 2022-01-01 to 2022-12-31: 
     # Entries: 14 pure z score, 14 for copula influenced
     # Entry Z-Score: 2.0, 1.75

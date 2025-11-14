@@ -16,14 +16,7 @@ class PairSelector():
     def __init__(self, prices_df, returns_df, train_end_date, test_end_date, 
                  top_n=10, min_correlation=0.6, max_correlation=0.95,
                  coint_pvalue=0.05, min_half_life=5, max_half_life=60):
-        """
-        Enhanced pair selector with cointegration and half-life filters
-        
-        Args:
-            coint_pvalue: Maximum p-value for cointegration test (0.01 = 99% confidence)
-            min_half_life: Minimum acceptable half-life in days
-            max_half_life: Maximum acceptable half-life in days
-        """
+
         self.prices = prices_df
         self.returns = returns_df
         self.top_n = top_n
@@ -44,12 +37,11 @@ class PairSelector():
     
     def calculate_half_life(self, spread):
         """
-        Calculate mean reversion half-life using Ornstein-Uhlenbeck process
+        Calculating mean reversion half-life using Ornstein-Uhlenbeck process
         """
         spread_lag = pd.Series(spread).shift(1).values[1:]
         spread_diff = pd.Series(spread).diff().values[1:]
         
-        # Remove NaN values
         valid_idx = ~(np.isnan(spread_lag) | np.isnan(spread_diff))
         if valid_idx.sum() < 20:
             return np.nan
@@ -58,7 +50,6 @@ class PairSelector():
         spread_diff = spread_diff[valid_idx]
         
         # OLS: spread_diff = theta * (mu - spread_lag) + epsilon
-        # Simplified: spread_diff = -lambda * spread_lag + const
         X = add_constant(spread_lag)
         model = OLS(spread_diff, X).fit()
         
@@ -71,9 +62,7 @@ class PairSelector():
         return half_life
     
     def calculate_pair_metrics(self, etf1, etf2, train_prices, train_returns):
-        """
-        Calculate comprehensive pair metrics including cointegration and half-life
-        """
+
         prices1 = train_prices[etf1].dropna()
         prices2 = train_prices[etf2].dropna()
         returns1 = train_returns[etf1].dropna()
@@ -90,29 +79,29 @@ class PairSelector():
         returns1 = returns1.loc[common_index]
         returns2 = returns2.loc[common_index]
 
-        # 1. Correlation check (pre-filter)
+        # Correlation check (pre-filter)
         corr, _ = spearmanr(returns1, returns2)
         if abs(corr) < self.min_correlation or abs(corr) > self.max_correlation:
             return None
         
-        # 2. Cointegration test (CRITICAL)
+        # Cointegration test (CRITICAL)
         coint_stat, pvalue, crit_values = coint(prices1, prices2)
         if pvalue > self.coint_pvalue:
             return None  # Not cointegrated
         
-        # 3. Calculate hedge ratio and spread
+        # Calculating hedge ratio and spread
         X = add_constant(prices2.values)
         ols_model = OLS(prices1.values, X).fit()
         hedge_ratio = ols_model.params[1]
         
         spread = prices1.values - hedge_ratio * prices2.values
         
-        # 4. Calculate half-life
+        # 4. Calculating half-life
         half_life = self.calculate_half_life(spread)
         if np.isnan(half_life) or half_life < self.min_half_life or half_life > self.max_half_life:
             return None  # Half-life out of acceptable range
         
-        # 5. Calculate spread statistics
+        # 5. Calculating spread statistics
         spread_mean = np.mean(spread)
         spread_std = np.std(spread)
         
@@ -138,9 +127,6 @@ class PairSelector():
         }
     
     def transform_to_uniform(self, data):
-        """
-        Transform data to uniform distribution using empirical CDF
-        """
         data_clean = data[np.isfinite(data)]
         if len(data_clean) < 10:
             return np.full(len(data), 0.5)
@@ -151,27 +137,20 @@ class PairSelector():
         return np.clip(uniform, 1e-6, 1-1e-6)
     
     def calculate_composite_score(self, pair):
-        """
-        Calculate composite ranking score based on multiple factors
-        """
-        # Lower p-value is better (stronger cointegration)
+
         coint_score = -np.log10(pair["coint_pvalue"] + 1e-10)
-        
-        # Half-life closer to 20 days is ideal
+
         half_life_score = 1 / (1 + abs(pair["half_life"] - 20) / 20)
-        
-        # Higher correlation (in absolute terms) is better
+
         corr_score = abs(pair["spearman_corr"])
-        
-        # Higher copula likelihood indicates better dependence structure
+
         copula_score = 1 / (1 + np.exp(-pair["copula_log_lik"] / 100))
         
-        # Weighted composite score
         weights = {
-            "coint": 0.4, # 0.4
-            "half_life": 0.3,  # 0.3
-            "corr": 0.15,   # 0.15
-            "copula": 0.15  # 0.15
+            "coint": 0.4, 
+            "half_life": 0.3,  
+            "corr": 0.15,   
+            "copula": 0.15  
         }
         
         composite = (weights["coint"] * coint_score +
@@ -182,9 +161,7 @@ class PairSelector():
         return composite
     
     def run_selection(self):
-        """
-        Run comprehensive pair selection with all filters
-        """
+
         print("Starting enhanced pair selection...")
         train_prices, train_returns = self.get_train_data()
         etf_list = sorted(train_prices.columns.tolist())
@@ -208,17 +185,14 @@ class PairSelector():
             print("WARNING: No pairs passed all filters!")
             return []
         
-        # Calculate composite scores and rank
         for pair in candidate_pairs:
             pair["composite_score"] = self.calculate_composite_score(pair)
-        
-        # Sort by composite score
+
         ranked_pairs = sorted(candidate_pairs, key=lambda x: x["composite_score"], reverse=True)
         selected_pairs = ranked_pairs[:self.top_n]
 
         print(f"\nSelected top {len(selected_pairs)} pairs:")
         
-        # Output selected pairs as dataframe for inspection
         display_cols = ["etf1", "etf2", "coint_pvalue", "half_life", 
                        "spearman_corr", "copula_type", "composite_score"]
         selected_pairs_df = pd.DataFrame(selected_pairs)[display_cols]
@@ -243,9 +217,9 @@ if __name__ == "__main__":
         train_end_date=train_end,
         test_end_date=test_end,
         top_n=10,
-        coint_pvalue=0.01,  # Strict cointegration
+        coint_pvalue=0.05,
         min_half_life=5,     # Fast enough mean reversion
-        max_half_life=40     # Not too slow
+        max_half_life=90     # Not too slow
     )
     
     selected_pairs = selector.run_selection()

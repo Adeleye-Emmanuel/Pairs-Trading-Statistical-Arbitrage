@@ -9,9 +9,6 @@ from src.copula_model import CopulaModel
 from src.config import ETFS_DIR, PROCESSED_DIR
 
 class OptimizedSignalGenerator:
-    """
-    Optimized based on your debug results showing copula rarely confirms z-score
-    """
     
     def __init__(self, 
                  lookback_days=30, # 60
@@ -19,19 +16,12 @@ class OptimizedSignalGenerator:
                  entry_z_score=2.0, # 2.0
                  exit_z_score=0.35, # 0.35
                  stop_loss_z_score=4.5, # 4.5
-                 # Copula as filter (not requirement)
                  use_copula_filter=False,
                  copula_veto_threshold=0.8,  # Only veto if copula strongly disagrees
                  # Position management
                  max_holding_days=30,
                  position_scale_by_conviction=True):
-        """
-        New approach based on debug insights:
-        1. Z-score is primary signal (works 19% of days)
-        2. Copula acts as a VETO only in extreme disagreement
-        3. Scale position size by conviction (both signals agree = larger position)
-        """
-        
+
         self.lookback_days = lookback_days
         self.entry_z_score = entry_z_score
         self.exit_z_score = exit_z_score
@@ -48,7 +38,7 @@ class OptimizedSignalGenerator:
         print(f"  Position Scaling: {'By conviction' if position_scale_by_conviction else 'Fixed'}")
     
     def calculate_spread_zscore(self, prices, etf1, etf2, hedge_ratio, lookback):
-        """Calculate z-score of the spread"""
+
         spread = prices[etf1] - hedge_ratio * prices[etf2]
         spread_mean = spread.rolling(lookback).mean()
         spread_std = spread.rolling(lookback).std()
@@ -56,10 +46,7 @@ class OptimizedSignalGenerator:
         return spread, z_score
     
     def calculate_copula_signal_strength(self, cond_prob, z_score):
-        """
-        Calculate how much the copula agrees/disagrees with z-score
-        Returns: -1 (strong disagree) to +1 (strong agree)
-        """
+
         if z_score > 0:  # Spread is high
             # For short signal, want copula prob to be low (ETF1 overvalued)
             # Low prob (0.0) = agrees, High prob (1.0) = disagrees
@@ -72,7 +59,7 @@ class OptimizedSignalGenerator:
         return agreement
     
     def transform_to_uniform(self, data, lookback_data):
-        """Transform to uniform using ECDF"""
+
         if not np.isfinite(data):
             return 0.5
         
@@ -86,7 +73,7 @@ class OptimizedSignalGenerator:
         return np.clip(uniform, 0.001, 0.999)
     
     def calculate_conditional_prob(self, u, v, copula_model):
-        """Calculate conditional probability - simplified"""
+
         try:
             copula_type = copula_model["copula_type"]
             copula = copula_model["copula"]
@@ -136,7 +123,6 @@ class OptimizedSignalGenerator:
         """Generate trading signals with copula as filter/scaler"""
         
         pair_name = f"{pair_data['etf1']}_{pair_data['etf2']}"
-        #print(f"\nGenerating optimized signals for {pair_name}...")
         
         if start_date:
             prices_df = prices_df[start_date:]
@@ -160,7 +146,7 @@ class OptimizedSignalGenerator:
         ])
         
         position = 0
-        position_size = 1.0  # Default full position
+        position_size = 1.0 
         entry_price = None
         entry_date = None
         entry_idx = None
@@ -182,12 +168,11 @@ class OptimizedSignalGenerator:
             results.loc[current_date, "spread"] = spread.iloc[i]
             results.loc[current_date, "z_score"] = current_z
             
-            # Calculate copula probability if using filter
             cond_prob = 0.5
             copula_agreement = 0.0
             
             if self.use_copula_filter and copula_model:
-                # Get returns for transformation
+
                 lookback_prices1 = prices_df[etf1].iloc[max(0, i-self.lookback_days):i]
                 lookback_prices2 = prices_df[etf2].iloc[max(0, i-self.lookback_days):i]
                 
@@ -248,7 +233,7 @@ class OptimizedSignalGenerator:
                     entry_date = current_date
                     entry_idx = i
             
-            # EXIT LOGIC (keep simple, z-score based)
+            # EXIT LOGIC
             elif position != 0:
                 exit_signal = False
                 
