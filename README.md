@@ -73,7 +73,7 @@ This 3.66 Sharpe point divergence provides empirical evidence that copulas offer
 **Cointegration Testing:**
 ```python
 # Engle-Granger two-step with strict threshold
-if p_value < 0.01:  # Industry standard
+if p_value < 0.05:
     calculate_half_life()
     if 5 < half_life < 90:  # Tradeable mean reversion
         fit_copula_model()
@@ -121,7 +121,7 @@ Final Sharpe = Average(Test 2022, 2023, 2024, 2025)
 
 ## 📁 Project Structure
 ```
-pairs-trading-copula/
+pairs-trading-copula-statistical-arbitrage/
 │
 ├── src/
 │   ├── data_processing.py      # Data cleaning and preparation
@@ -161,7 +161,7 @@ seaborn >= 0.11.0
 ```bash
 # Clone repository
 git clone https://github.com/Adeleye-Emmanuel/pairs-trading-copula-statistical-arbitrage.git
-cd pairs-trading-copula
+cd pairs-trading-copula-statistical-arbitrage
 
 # Create virtual environment
 python -m venv venv
