@@ -6,13 +6,16 @@ A systematic statistical arbitrage strategy that combines traditional z-score me
 
 This project implements a quantitatively rigorous pairs trading system that addresses a critical weakness in traditional mean reversion strategies: **regime breaks**. By using copulas as a filtering mechanism rather than a primary signal generator, the strategy achieved a 69% improvement in risk-adjusted returns compared to pure z-score approaches.
 
+## Assets
+This strategy was executed on a basket of 100 equity aseet classes over a broad 12 categories (Broad Market ETFs, S Tech/Growth, US Financials/Industrials, Healthcare/Consumer Staples, Energy/Materials, Sector ETFs (SPDR), International Developed, Bonds/Commodities, US Consumer/Media/Other, Emerging Market Country, Fixed Income, Commodities/Thematic, Real Estate) 
+
 ### Key Achievement
 
 **The 2025 Regime Break Proof:**
 - Pure Z-Score Strategy: **-0.62 Sharpe** (-5.11% return, -17.21% max drawdown)
 - Copula-Enhanced Strategy: **+3.04 Sharpe** (+14.49% return, -5.03% max drawdown)
 
-This 3.66 Sharpe point divergence provides empirical evidence that copulas offer genuine protection during market regime transitions.
+This 3.04 Sharpe point divergence provides empirical evidence that copulas offer genuine protection during market regime transitions.
 
 ## 📊 Performance Summary (2022-2025)
 
